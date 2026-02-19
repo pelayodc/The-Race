@@ -49,7 +49,7 @@ if __name__ == "__main__":
         json_data = openJsonFile(jsonFile)
         lastRunTime = json_data['runtime']
         # Set the timezone to Europe/London
-        timezone = pytz.timezone('Europe/London')
+        timezone = pytz.timezone('Europe/Madrid')
         currentTime = datetime.now(tz=timezone)
         dateStr = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%y")
 
@@ -161,8 +161,13 @@ if __name__ == "__main__":
     async def add(inter: ApplicationCommandInteraction, name: str, tagline: str, platform: str = commands.Param(choices=platforms), region: str = commands.Param(choices=regions)):
         await inter.response.defer()
         jsonData = openJsonFile(jsonFile)
+        summoners = jsonData.get("summoners")
+
         if "#" in tagline:
             tagline = tagline.replace("#", "")
+
+        if summoners is None:
+            jsonData['summoners'] = {}
 
         summonerFullName = f"{name}#{tagline}"
         summonerList = [summoner.lower() for summoner in jsonData['summoners']]
@@ -187,7 +192,7 @@ if __name__ == "__main__":
                 data = jsonData
 
                 data["summoners"][summonerFullName] = {
-                    "id": apiData2['id'],
+                    "id": apiData2['puuid'],
                     "puuid": summonerPuuid,
                     "profileIconId": 123,
                     "platform": platform,
@@ -227,5 +232,5 @@ if __name__ == "__main__":
             writeToJsonFile("data.json", jsonData)
             await inter.send(f"{originalCaseSummoner} removed")
 
-
+    print(discordToken)
     bot.run(discordToken)

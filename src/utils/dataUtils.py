@@ -256,7 +256,7 @@ def fetchAllSummonerData(force, daily):
         summoner.region = jsonData["summoners"][summonerName]["region"]
         # print(f'Fetching {summoner.fullName} rank data')
         try:
-            riotApiData = requests.get(f'https://{summoner.platform}.api.riotgames.com/lol/league/v4/entries/by-summoner/{summoner.id}?api_key={riotApKey}').json()
+            riotApiData = requests.get(f'https://{summoner.platform}.api.riotgames.com/lol/league/v4/entries/by-puuid/{summoner.puuid}?api_key={riotApKey}').json()
 
             for data in riotApiData:
                 if data['queueType'] == 'RANKED_SOLO_5x5':
@@ -517,5 +517,10 @@ def checkForNewPatchNotes(jsonFilePath, forceUpdate):
 
 def numberOfSummoners(wiggleRoom):
     jsonFata = openJsonFile(jsonFile)
-    count = len(jsonFata['summoners']) + wiggleRoom
+    
+    summoners = jsonFata.get("summoners")
+    if not isinstance(summoners, list):
+        summoners = []
+
+    count = len(summoners) + wiggleRoom
     return count
