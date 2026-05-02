@@ -15,10 +15,10 @@ bot = commands.InteractionBot()
 def rank_icon(tier):
     icons = {
         "IRON": "⬛",
-        "BRONZE": "🟫",
+        "BRONZE": "",
         "SILVER": "⬜",
         "GOLD": "🟨",
-        "PLATINUM": "🟦",
+        "PLATINUM": "<:platinum:15001º6979817103550>",
         "EMERALD": "🟩",
         "DIAMOND": "💎",
         "MASTER": "🟪",
