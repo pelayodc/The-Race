@@ -428,6 +428,36 @@ def checkForNewPatchNotes(jsonFilePath, forceUpdate):
     def patchVersion(version):
         return tuple(int(part) for part in str(version).split("."))
 
+    def imageUrlFromTag(imgTag):
+        imageUrl = imgTag.get("src") or imgTag.get("data-src")
+        if imageUrl:
+            return imageUrl
+
+        srcset = imgTag.get("srcset")
+        if srcset:
+            return srcset.split(",")[-1].strip().split()[0]
+
+        return None
+
+    def findPatchHighlightsImage(patchSoup):
+        patchHighlightsHeader = patchSoup.find(
+            lambda tag: tag.name in ["h2", "h3"] and "patch highlights" in tag.get_text(" ", strip=True).lower()
+        )
+
+        if patchHighlightsHeader:
+            imageTag = patchHighlightsHeader.find_next("img")
+            if imageTag:
+                return imageUrlFromTag(imageTag)
+
+        imageTag = patchSoup.find(
+            "img",
+            src=lambda src: src and ("highlight" in src.lower() or "patch" in src.lower())
+        )
+        if imageTag:
+            return imageUrlFromTag(imageTag)
+
+        return None
+
     def downloadImage(imageUrl, saveDir):
         response = requests.get(imageUrl)
         if response.status_code == 200:
@@ -511,11 +541,11 @@ def checkForNewPatchNotes(jsonFilePath, forceUpdate):
             return False, None, daysAgo, daysUntilNextPatch, None, None
 
         patchSoup = BeautifulSoup(patchResponse.content, "html.parser")
-        imageTags = patchSoup.find_all("img", src=lambda src: src and "highlight" in src.lower())
-        imageUrl = imageTags[0]["src"] if imageTags else None
+        imageUrl = findPatchHighlightsImage(patchSoup)
         imgPath = None
 
         if imageUrl:
+            imageUrl = urljoin(fullUrl, imageUrl)
             saveDir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Imgs", "patch highlights")
             imgDownloaded, imgPath = downloadImage(imageUrl, saveDir)
             if not imgDownloaded:
