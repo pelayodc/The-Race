@@ -3,3 +3,5 @@
 /src/data.json
 /src/Daily Rank list.png
 /src/Rank list.png
+__pycache__/
+*.pyc

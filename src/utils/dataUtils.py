@@ -1,7 +1,8 @@
 import json
+import re
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse, unquote
+from urllib.parse import urljoin, urlparse, unquote
 import os
 import numpy as np
 import time
@@ -421,7 +422,12 @@ def update(force, daily):
 
 
 def checkForNewPatchNotes(jsonFilePath, forceUpdate):
-    # Function to download image from URL
+    daysAgo = 0
+    daysUntilNextPatch = 0
+
+    def patchVersion(version):
+        return tuple(int(part) for part in str(version).split("."))
+
     def downloadImage(imageUrl, saveDir):
         response = requests.get(imageUrl)
         if response.status_code == 200:
@@ -450,69 +456,78 @@ def checkForNewPatchNotes(jsonFilePath, forceUpdate):
             print("Failed to download image.")
             return False, None
 
-    # Load latest patch version from JSON file
-    with open(jsonFilePath, "r") as f:
-        latestPatchData = json.load(f)
-        latestPatch = latestPatchData.get("latestPatch")
+    try:
+        with open(jsonFilePath, "r") as f:
+            latestPatchData = json.load(f)
+    except FileNotFoundError:
+        latestPatchData = {}
+
+    latestPatch = latestPatchData.get("latestPatch", 0)
 
     # URL of the League of Legends patch notes page
     url = "https://www.leagueoflegends.com/en-us/news/tags/patch-notes/"
 
-    # Send a GET request to the URL
     response = requests.get(url)
+    if response.status_code != 200:
+        print(f"Failed to fetch patch notes. Status code: {response.status_code}")
+        return False, None, daysAgo, daysUntilNextPatch, None, None
 
-    # Parse the HTML content of the page
     soup = BeautifulSoup(response.content, "html.parser")
 
-    # Find the first element with class="style__List-sc-106zuld-2 cGSeTq"
-    firstElement = soup.find(class_="style__List-sc-106zuld-2 cGSeTq")
+    patchRegex = re.compile(r"(?:League of Legends\s+)?Patch\s+(\d+(?:\.\d+)?)\s+Notes", re.IGNORECASE)
+    patchLink = None
+    patchMatch = None
 
-    if firstElement:
-        # Find the <h2> element with the specified data-testid and class attributes
-        patchTitle = firstElement.find("h2", {"data-testid": "articlelist:article-0:title", "class": "style__Title-sc-1h41bzo-8 hvOSAW"})
+    for link in soup.find_all("a", href=True):
+        text = link.get_text(" ", strip=True)
+        match = patchRegex.search(text)
+        if match:
+            patchLink = link
+            patchMatch = match
+            break
 
-        if patchTitle:
-            # Extract the URL from the href attribute of the <a> tag enclosing the title
-            patchUrl = patchTitle.find_parent("a")["href"]
-            fullUrl = "https://www.leagueoflegends.com" + patchUrl
+    if patchLink is None or patchMatch is None:
+        print("Failed to find latest patch notes article.")
+        return False, None, daysAgo, daysUntilNextPatch, None, None
 
-            # Extract patch number from title
-            newPatch = patchTitle.text.split()[1]
+    newPatch = patchMatch.group(1)
+    fullUrl = urljoin(url, patchLink["href"])
 
-            timeElement = soup.find("time")
-            datetimeStr = timeElement["datetime"]
-            datetimeObjDate = datetime.strptime(datetimeStr[:10], "%Y-%m-%d").date()
-            dateNow = datetime.now().date()
-            # dateNow = datetime(2024, 2, 20).date()
+    timeElement = patchLink.find("time") or soup.find("time")
+    if timeElement and timeElement.get("datetime"):
+        datetimeStr = timeElement["datetime"]
+        datetimeObjDate = datetime.strptime(datetimeStr[:10], "%Y-%m-%d").date()
+        dateNow = datetime.now().date()
 
-            daysDifference = abs((datetimeObjDate - dateNow).days)
-            daysAgo = daysDifference - 1
-            nextPatchDate = datetimeObjDate + timedelta(weeks=2)
-            daysUntilNextPatch = (nextPatchDate - dateNow).days
-            daysUntilNextPatch += 1  # Add 1 to include the current day
+        daysDifference = abs((datetimeObjDate - dateNow).days)
+        daysAgo = daysDifference - 1
+        nextPatchDate = datetimeObjDate + timedelta(weeks=2)
+        daysUntilNextPatch = (nextPatchDate - dateNow).days + 1
 
-            # Check if the new patch is newer than the one stored in JSON
-            if (float(newPatch) > float(latestPatch)) or forceUpdate:
-                # Send a GET request to the patch notes URL
-                patchResponse = requests.get(fullUrl)
-                patchSoup = BeautifulSoup(patchResponse.content, "html.parser")
+    if (patchVersion(newPatch) > patchVersion(latestPatch)) or forceUpdate:
+        patchResponse = requests.get(fullUrl)
+        if patchResponse.status_code != 200:
+            print(f"Failed to fetch patch article. Status code: {patchResponse.status_code}")
+            return False, None, daysAgo, daysUntilNextPatch, None, None
 
-                # Search for the image by filename
-                imageTags = patchSoup.find_all("img", src=lambda src: src and "highlight" in src.lower())
-                if imageTags:
-                    # Assuming the first image found is the correct one
-                    imageUrl = imageTags[0]["src"]
-                    # Download the image
-                    imgDownloaded, imgPath = downloadImage(imageUrl, "imgs/patch highlights")
-                    if imgDownloaded:
-                        # Update latest patch in JSON file
-                        latestPatchData["latestPatch"] = newPatch
-                        with open(jsonFilePath, "w") as f:
-                            json.dump(latestPatchData, f, indent=2)
-                            # print("Updated latest patch to:", newPatch)
-                        return True, newPatch, daysAgo, daysUntilNextPatch, fullUrl, imgPath  # Return True, updated patch version, and image path
+        patchSoup = BeautifulSoup(patchResponse.content, "html.parser")
+        imageTags = patchSoup.find_all("img", src=lambda src: src and "highlight" in src.lower())
+        imageUrl = imageTags[0]["src"] if imageTags else None
+        imgPath = None
 
-    return False, None, daysAgo, daysUntilNextPatch, None, None  # Return False if there's no update or encountered an error
+        if imageUrl:
+            saveDir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Imgs", "patch highlights")
+            imgDownloaded, imgPath = downloadImage(imageUrl, saveDir)
+            if not imgDownloaded:
+                imgPath = None
+
+        latestPatchData["latestPatch"] = newPatch
+        with open(jsonFilePath, "w") as f:
+            json.dump(latestPatchData, f, indent=2)
+
+        return True, newPatch, daysAgo, daysUntilNextPatch, fullUrl, imgPath
+
+    return False, newPatch, daysAgo, daysUntilNextPatch, fullUrl, None
 
 
 def numberOfSummoners(wiggleRoom):

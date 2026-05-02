@@ -31,13 +31,16 @@ if __name__ == "__main__":
         if updateAvailable:
             channel = bot.get_channel(discordChannel)
             # print("There is a new patch available. Patch version:", updatedPatch, fullUrl, "Image saved at:", imagePath)
-            with open(imagePath, 'rb') as f:
-                image = disnake.File(f)
-
-                await channel.send(f'Patch {updatedPatch}\n'
-                                   f'{"tomorrow" if daysAgo == -1 else "today" if daysAgo == 0 else "yesterday" if daysAgo == 1 else f"{daysAgo} days ago"}\n'
-                                   f'{"" if daysAgo < 1 or daysTillNext == 13 or daysTillNext == 0 else f"next patch in: {daysTillNext} days"}\n'
-                                   f'{fullUrl}', file=image)
+            message = (f'Patch {updatedPatch}\n'
+                       f'{"tomorrow" if daysAgo == -1 else "today" if daysAgo == 0 else "yesterday" if daysAgo == 1 else f"{daysAgo} days ago"}\n'
+                       f'{"" if daysAgo < 1 or daysTillNext == 13 or daysTillNext == 0 else f"next patch in: {daysTillNext} days"}\n'
+                       f'{fullUrl}')
+            if imagePath:
+                with open(imagePath, 'rb') as f:
+                    image = disnake.File(f)
+                    await channel.send(message, file=image)
+            else:
+                await channel.send(message)
 
 
     @tasks.loop(seconds=60)
@@ -116,12 +119,18 @@ if __name__ == "__main__":
         update_available, updated_patch, days_ago, days_till_next, full_url, image_path = checkForNewPatchNotes("data.json", True)
         if update_available:
             # print("There is a new patch available. Patch version:", updated_patch, full_url, "Image saved at:", image_path)
-            with open(image_path, 'rb') as f:
-                image = disnake.File(f)
-                await inter.send(f'Patch {updated_patch}\n'
-                                 f'{"tomorrow" if days_ago == -1 else "today" if days_ago == 0 else "yesterday" if days_ago == 1 else f"{days_ago} days ago"}\n'
-                                 f'{"" if days_ago < 1 or days_till_next == 13 or days_till_next == 0 else f"next patch in: {days_till_next} days"}\n'
-                                 f'{full_url}', file=image)
+            message = (f'Patch {updated_patch}\n'
+                       f'{"tomorrow" if days_ago == -1 else "today" if days_ago == 0 else "yesterday" if days_ago == 1 else f"{days_ago} days ago"}\n'
+                       f'{"" if days_ago < 1 or days_till_next == 13 or days_till_next == 0 else f"next patch in: {days_till_next} days"}\n'
+                       f'{full_url}')
+            if image_path:
+                with open(image_path, 'rb') as f:
+                    image = disnake.File(f)
+                    await inter.send(message, file=image)
+            else:
+                await inter.send(message)
+        else:
+            await inter.send("Could not fetch the latest patch notes.")
 
 
     @bot.slash_command(description="breakdown of mvp score for a given game")
