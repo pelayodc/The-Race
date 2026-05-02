@@ -18,7 +18,7 @@ def rank_icon(tier):
         "BRONZE": "",
         "SILVER": "⬜",
         "GOLD": "🟨",
-        "PLATINUM": "<:platinum:15001º6979817103550>",
+        "PLATINUM": "<:platinum:1500216979817103550>",
         "EMERALD": "🟩",
         "DIAMOND": "💎",
         "MASTER": "🟪",
