@@ -411,13 +411,15 @@ def fetchAllSummonerData(force, daily):
     return summonersList, updated
 
 
-def update(force, daily):
+def update(force, daily, returnData=False, generate=True):
     list = fetchAllSummonerData(force, daily)
 
     print(f"\r{datetime.now().strftime('%I:%M:%S %p %d/%m/%Y')}", end="", flush=True)
 
-    if list[1] or force:
+    if generate and (list[1] or force):
         generateImage(list[0], daily)
+    if returnData:
+        return list
     return list[1]
 
 

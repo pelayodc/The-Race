@@ -11,6 +11,98 @@ from utils.jsonUtils import openJsonFile, writeToJsonFile
 
 bot = commands.InteractionBot()
 
+
+def rank_icon(tier):
+    icons = {
+        "IRON": "⬛",
+        "BRONZE": "🟫",
+        "SILVER": "⬜",
+        "GOLD": "🟨",
+        "PLATINUM": "🟦",
+        "EMERALD": "🟩",
+        "DIAMOND": "💎",
+        "MASTER": "🟪",
+        "GRANDMASTER": "🟥",
+        "CHALLENGER": "🏆",
+    }
+    return icons.get(tier, "▫️")
+
+
+def delta_text(value):
+    if value > 0:
+        return f" ↑ +{value}"
+    if value < 0:
+        return f" ↓ {value}"
+    return ""
+
+
+def leaderboard_embed(summoners, daily=False, date_str=None):
+    title = "Solo/Duo Leaderboard"
+    if daily:
+        title = f"Daily Solo/Duo Leaderboard - {date_str}"
+
+    embed = disnake.Embed(
+        title=title,
+        colour=disnake.Colour.gold(),
+        timestamp=datetime.now()
+    )
+    embed.set_author(name="The Race")
+
+    summoner_lines = []
+    rank_lines = []
+
+    for summoner in summoners:
+        rank = f"#{summoner.leaderboardPosition}"
+        name = summoner.name
+        if len(name) > 18:
+            name = f"{name[:15]}..."
+
+        score_delta = summoner.deltaDailyScore if daily else summoner.deltaScore
+        position_delta = summoner.deltaDailyLeaderboardPosition if daily else summoner.deltaLeaderboardPosition
+        games_delta = summoner.deltaDailyGamesPlayed if daily else summoner.deltaGamesPlayed
+        lp_delta = delta_text(score_delta)
+        if score_delta == 0 and games_delta:
+            lp_delta = " ↓ -0"
+
+        tier_rank = f"{summoner.tier} {summoner.rank}"
+        lp = f"{summoner.leaguePoints} LP"
+        line_left = f"**{rank}** {name}"
+        line_right = f"{rank_icon(summoner.tier)} {tier_rank} - **{lp}**{lp_delta}"
+        if position_delta > 0:
+            line_left += " ▲"
+        elif position_delta < 0:
+            line_left += " ▼"
+
+        if len("\n".join(summoner_lines + [line_left])) > 1024:
+            break
+        if len("\n".join(rank_lines + [line_right])) > 1024:
+            break
+
+        summoner_lines.append(line_left)
+        rank_lines.append(line_right)
+
+    embed.add_field(name="Summoners", value="\n".join(summoner_lines) or "-", inline=True)
+    embed.add_field(name="Ranks", value="\n".join(rank_lines) or "-", inline=True)
+    embed.set_footer(text="Updated leaderboard")
+    return embed
+
+
+async def send_or_edit_leaderboard(channel, json_data, summoners, daily=False, date_str=None):
+    embed = leaderboard_embed(summoners, daily, date_str)
+    message_id = json_data.get("leaderboardMessageId")
+
+    if message_id:
+        try:
+            message = await channel.fetch_message(int(message_id))
+            await message.edit(content=None, embed=embed)
+            return message.id
+        except (disnake.NotFound, disnake.Forbidden, disnake.HTTPException, ValueError):
+            pass
+
+    message = await channel.send(embed=embed)
+    return message.id
+
+
 if __name__ == "__main__":
 
     @bot.event
@@ -62,21 +154,21 @@ if __name__ == "__main__":
         if currentTime.timestamp() > dailyTime > lastRunTime:
             json_data['runtime'] = dailyTime
             writeToJsonFile("data.json", json_data)
-            if update(False, True):
+            force_leaderboard = not json_data.get("leaderboardMessageId")
+            summoners, updated = update(force_leaderboard, True, returnData=True, generate=False)
+            if updated or force_leaderboard:
                 channel = bot.get_channel(discordChannel)
-
-                with open("Daily Rank list.png", 'rb') as f:
-                    image = disnake.File(f)
-
-                await channel.send(f'Daily - {dateStr}', file=image)
+                latest_json_data = openJsonFile(jsonFile)
+                latest_json_data['leaderboardMessageId'] = await send_or_edit_leaderboard(channel, latest_json_data, summoners, True, dateStr)
+                writeToJsonFile("data.json", latest_json_data)
         else:
-            if update(False, False):
+            force_leaderboard = not json_data.get("leaderboardMessageId")
+            summoners, updated = update(force_leaderboard, False, returnData=True, generate=False)
+            if updated or force_leaderboard:
                 channel = bot.get_channel(discordChannel)
-
-                with open("Rank list.png", 'rb') as f:
-                    image = disnake.File(f)
-
-                await channel.send(file=image)
+                latest_json_data = openJsonFile(jsonFile)
+                latest_json_data['leaderboardMessageId'] = await send_or_edit_leaderboard(channel, latest_json_data, summoners)
+                writeToJsonFile("data.json", latest_json_data)
 
 
     @bot.slash_command(description="Full list of summoners")

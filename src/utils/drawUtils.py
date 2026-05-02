@@ -8,20 +8,32 @@ from PIL import Image, ImageDraw
 from .commonUtils import version, Rank
 
 
-def drawChampionImage(canvas, x, y, champ, win, remake, mvp):
+def drawChampionPlaceholder(canvas, x, y, size):
+    draw = ImageDraw.Draw(canvas)
+    draw.ellipse((x, y, x + size, y + size), fill=(31, 32, 40), outline=(64, 68, 82), width=3)
+    font = ImageFont.truetype("ARIAL.TTF", max(18, size // 3))
+    drawTextCentered(canvas, "-", x + size / 2, y + size / 2, font, (132, 138, 154))
+
+
+def drawChampionImage(canvas, x, y, champ, win, remake, mvp, size=100, drawMvpBadge=True):
+    if not champ:
+        drawChampionPlaceholder(canvas, x, y, size)
+        return
+
     champName = "Fiddlesticks" if champ == "FiddleSticks" else champ
     imgPath = f"Imgs/Champ icons/{champName}.png"
 
-    # Check if the image is already downloaded
-    if os.path.exists(imgPath):
-        img = Image.open(imgPath).convert("RGBA")
-    else:
-        # Download the image from the internet
-        response = requests.get(f"http://ddragon.leagueoflegends.com/cdn/{version}/img/champion/{champName}.png")
-        img = Image.open(BytesIO(response.content)).convert("RGBA")
-        # Save the image for future use
-        os.makedirs(os.path.dirname(imgPath), exist_ok=True)
-        img.save(imgPath)
+    try:
+        if os.path.exists(imgPath):
+            img = Image.open(imgPath).convert("RGBA")
+        else:
+            response = requests.get(f"http://ddragon.leagueoflegends.com/cdn/{version}/img/champion/{champName}.png")
+            img = Image.open(BytesIO(response.content)).convert("RGBA")
+            os.makedirs(os.path.dirname(imgPath), exist_ok=True)
+            img.save(imgPath)
+    except Exception:
+        drawChampionPlaceholder(canvas, x, y, size)
+        return
 
     # Crop the edges 5%
     width, height = img.size
@@ -40,26 +52,23 @@ def drawChampionImage(canvas, x, y, champ, win, remake, mvp):
     # Add a stroke around the circle
     draw = ImageDraw.Draw(img)
     if remake:
-        strokeColor = (40, 40, 48)
+        strokeColor = (99, 105, 120)
     else:
         if win:
             if mvp:
-                mvp = Image.open("Imgs/mvp win.png").convert("RGBA")
-                canvas.paste(mvp, (x + 80, y + 80), mvp)
-                strokeColor = (255, 255, 0)
+                if drawMvpBadge:
+                    mvp = Image.open("Imgs/mvp win.png").convert("RGBA")
+                    canvas.paste(mvp, (x + size - 20, y + size - 20), mvp)
+                strokeColor = (224, 206, 83)
             else:
-                strokeColor = (0, 255, 0)
+                strokeColor = (71, 201, 118)
         else:
-            # if mvp:
-            #     mvp = Image.open("Imgs/mvp loss.png").convert("RGBA")
-            #     canvas.paste(mvp, (x + 80, y + 80), mvp)
-            strokeColor = (255, 0, 0)
+            strokeColor = (218, 79, 87)
 
-    strokeWidth = 4
+    strokeWidth = max(3, size // 22)
     draw.ellipse((0, 0, img.size[0], img.size[1]), outline=strokeColor, width=strokeWidth)
 
-    # Resize the image to 100x100
-    img = img.resize((100, 100))
+    img = img.resize((size, size), resample=Image.BICUBIC)
 
     # Paste the image onto the canvas at the specified coordinates
     canvas.paste(img, (x, y), img)
@@ -142,228 +151,239 @@ def formatTime(seconds):
 
 
 def formatDamage(damage):
+    if damage is None:
+        return "-"
     return "{:,}".format(damage)
 
 
-def generateImage(summones, daily):
-    # Calculate the size of the canvas based on the number of summonerss
-    canvasWidth = 1820
-    canvasHeight = (140 * len(summones) - 20 + 100)
-    if daily:
-        canvasHeight = (140 * len(summones) - 20 + 340)
+def textWidth(draw, text, font):
+    bbox = draw.textbbox((0, 0), str(text), font=font)
+    return bbox[2] - bbox[0]
 
-    # Create image of rank list on top of background
-    canvas = Image.new('RGBA', (canvasWidth, canvasHeight), (255, 255, 255, 0))
+
+def truncateText(draw, text, font, maxWidth):
+    text = str(text)
+    if textWidth(draw, text, font) <= maxWidth:
+        return text
+
+    suffix = "..."
+    while text and textWidth(draw, text + suffix, font) > maxWidth:
+        text = text[:-1]
+    return text + suffix if text else suffix
+
+
+def drawLabel(draw, text, x, y, font, fill=(139, 146, 164)):
+    draw.text((x, y), text.upper(), fill=fill, font=font)
+
+
+def drawPill(draw, box, fill, outline=None, radius=18, width=1):
+    draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=width)
+
+
+def drawSmallMvpBadge(canvas, x, y):
+    draw = ImageDraw.Draw(canvas)
+    badgeBox = (x, y, x + 46, y + 20)
+    draw.rounded_rectangle(badgeBox, radius=7, fill=(78, 54, 20), outline=(224, 206, 83), width=2)
+    font = ImageFont.truetype("ARIAL.TTF", 14)
+    drawTextCentered(canvas, "MVP", x + 23, y + 10, font, (255, 232, 104))
+
+
+def drawChangeBadge(canvas, x, y, daily, summoner, fonts):
+    draw = ImageDraw.Draw(canvas)
+    scoreDelta = summoner.deltaDailyScore if daily else summoner.deltaScore
+    gamesDelta = summoner.deltaDailyGamesPlayed if daily else summoner.deltaGamesPlayed
+    positionDelta = summoner.deltaDailyLeaderboardPosition if daily else summoner.deltaLeaderboardPosition
+
+    if scoreDelta > 0:
+        text = f"+{scoreDelta}"
+        fill = (43, 112, 70)
+        colour = (112, 234, 150)
+    elif scoreDelta < 0:
+        text = str(scoreDelta)
+        fill = (116, 49, 56)
+        colour = (255, 132, 140)
+    elif gamesDelta:
+        text = "-0"
+        fill = (83, 62, 45)
+        colour = (255, 179, 95)
+    else:
+        text = "0"
+        fill = (42, 45, 56)
+        colour = (139, 146, 164)
+
+    drawPill(draw, (x, y, x + 88, y + 38), fill, None, radius=19)
+    drawTextCentered(canvas, text, x + 44, y + 19, fonts["change"], colour)
+
+    if positionDelta:
+        arrowColour = (112, 234, 150) if positionDelta > 0 else (255, 132, 140)
+        if positionDelta > 0:
+            points = [(x + 36, y + 55), (x + 44, y + 43), (x + 52, y + 55)]
+        else:
+            points = [(x + 36, y + 43), (x + 44, y + 55), (x + 52, y + 43)]
+        draw.polygon(points, fill=arrowColour)
+
+
+def drawMatchChip(canvas, summoner, gameNumber, x, y, fonts):
+    draw = ImageDraw.Draw(canvas)
+    champ = summoner.__dict__.get(f"game{gameNumber}Champion")
+    win = summoner.__dict__.get(f"game{gameNumber}Win")
+    remake = summoner.__dict__.get(f"game{gameNumber}Remake")
+    mvp = summoner.__dict__.get(f"game{gameNumber}Mvp")
+    kills = summoner.__dict__.get(f"game{gameNumber}Kills")
+    deaths = summoner.__dict__.get(f"game{gameNumber}Deaths")
+    assists = summoner.__dict__.get(f"game{gameNumber}Assists")
+    damage = summoner.__dict__.get(f"game{gameNumber}DamageDealtToChampions")
+
+    chipFill = (38, 40, 50) if champ else (31, 32, 40)
+    chipOutline = (64, 68, 82)
+    if remake:
+        chipOutline = (101, 107, 122)
+    elif win is True:
+        chipOutline = (54, 136, 84)
+    elif win is False:
+        chipOutline = (144, 58, 65)
+
+    drawPill(draw, (x, y, x + 202, y + 82), chipFill, chipOutline, radius=24, width=2)
+    drawChampionImage(canvas, x + 10, y + 9, champ, win, remake, mvp, size=64, drawMvpBadge=False)
+
+    kda = f"{kills}/{deaths}/{assists}" if None not in (kills, deaths, assists) else "-/-/-"
+    draw.text((x + 84, y + 17), kda, fill=(244, 246, 252), font=fonts["kda"])
+    draw.text((x + 84, y + 47), formatDamage(damage), fill=(166, 173, 190), font=fonts["damage"])
+
+    if mvp:
+        drawSmallMvpBadge(canvas, x + 148, y + 8)
+
+
+def drawHeader(canvas, daily, fonts, canvasWidth, headerHeight):
+    draw = ImageDraw.Draw(canvas)
+    title = "Daily Ranking" if daily else "The Race Ranking"
+    subtitle = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%y") if daily else "Live solo queue standings"
+
+    draw.text((28, 24), title, fill=(248, 249, 252), font=fonts["title"])
+    draw.text((31, 72), subtitle, fill=(139, 146, 164), font=fonts["subtitle"])
+
+    drawLabel(draw, "Player", 244, headerHeight - 35, fonts["label"])
+    drawLabel(draw, "Change", 598, headerHeight - 35, fonts["label"])
+    drawLabel(draw, "Recent games", 720, headerHeight - 35, fonts["label"])
+    draw.line((28, headerHeight - 12, canvasWidth - 28, headerHeight - 12), fill=(57, 61, 74), width=2)
+
+
+def recentLosses(summoner):
+    losses = 0
+    for gameNumber in range(1, 6):
+        if summoner.__dict__.get(f"game{gameNumber}Remake"):
+            continue
+        if summoner.__dict__.get(f"game{gameNumber}Win") is False:
+            losses += 1
+        else:
+            break
+    return losses
+
+
+def drawSummonerRow(canvas, summoner, index, y, daily, icons, hotStreakIcon, coldStreakIcon, crownIcon, fonts):
+    draw = ImageDraw.Draw(canvas)
+    x = 28
+    rowWidth = 1764
+    rowHeight = 124
+    accentColours = [(218, 178, 74), (194, 199, 208), (190, 119, 51)]
+    accent = accentColours[index] if index < len(accentColours) else (70, 75, 91)
+
+    drawPill(draw, (x, y, x + rowWidth, y + rowHeight), (42, 44, 55), accent, radius=26, width=3 if index < 3 else 1)
+    draw.rounded_rectangle((x, y, x + 10, y + rowHeight), radius=5, fill=accent)
+
+    rankCenterX = x + 42
+    rankCenterY = y + 62
+    draw.ellipse((rankCenterX - 34, rankCenterY - 34, rankCenterX + 34, rankCenterY + 34), fill=(31, 32, 40))
+    drawTextCentered(canvas, str(summoner.leaderboardPosition), rankCenterX, rankCenterY, fonts["rank"], (248, 249, 252))
+
+    iconBack = (x + 92, y + 17, x + 182, y + 107)
+    draw.ellipse(iconBack, fill=(31, 32, 40))
+    tierIcon = icons.get(summoner.tier)
+    if tierIcon:
+        canvas.paste(tierIcon, (x + 104, y + 29), tierIcon)
+
+    if summoner.hasCrown:
+        canvas.paste(crownIcon, (x + 128, y + 10), crownIcon)
+
+    playerX = x + 212
+    name = truncateText(draw, summoner.name, fonts["name"], 280)
+    draw.text((playerX, y + 16), name, fill=(248, 249, 252), font=fonts["name"])
+    nameWidth = textWidth(draw, name, fonts["name"])
+    tagline = truncateText(draw, f"#{summoner.tagline}", fonts["tagline"], 78)
+    draw.text((playerX + nameWidth + 8, y + 38), tagline, fill=(178, 184, 199), font=fonts["tagline"])
+
+    streakX = playerX + nameWidth + textWidth(draw, tagline, fonts["tagline"]) + 16
+    if summoner.hotStreak:
+        canvas.paste(hotStreakIcon, (streakX, y + 27), hotStreakIcon)
+    elif recentLosses(summoner) >= 3:
+        canvas.paste(coldStreakIcon, (streakX, y + 27), coldStreakIcon)
+
+    rankText = f"{summoner.tier} {Rank.rankToNumber(summoner.rank)}"
+    draw.text((playerX, y + 58), rankText, fill=(229, 233, 242), font=fonts["tier"])
+
+    totalGames = summoner.wins + summoner.losses
+    winrate = round(summoner.wins / totalGames * 100, 1) if totalGames else 0
+    statY = y + 92
+    statFill = (31, 32, 40)
+    drawPill(draw, (playerX, statY - 5, playerX + 78, statY + 22), statFill, None, radius=13)
+    drawTextCentered(canvas, f"{summoner.leaguePoints} LP", playerX + 39, statY + 8, fonts["small"], (220, 225, 236))
+    drawPill(draw, (playerX + 86, statY - 5, playerX + 176, statY + 22), statFill, None, radius=13)
+    drawTextCentered(canvas, f"{summoner.wins}/{summoner.losses}", playerX + 131, statY + 8, fonts["small"], (220, 225, 236))
+    drawPill(draw, (playerX + 184, statY - 5, playerX + 266, statY + 22), statFill, None, radius=13)
+    drawTextCentered(canvas, f"{winrate}%", playerX + 225, statY + 8, fonts["small"], (220, 225, 236))
+
+    drawChangeBadge(canvas, x + 570, y + 34, daily, summoner, fonts)
+
+    for gameNumber in range(1, 6):
+        drawMatchChip(canvas, summoner, gameNumber, x + 692 + ((gameNumber - 1) * 214), y + 21, fonts)
+
+
+def generateImage(summones, daily):
+    canvasWidth = 1820
+    headerHeight = 130
+    rowHeight = 124
+    rowGap = 14
+    footerHeight = 58
+    canvasHeight = headerHeight + (rowHeight + rowGap) * len(summones) + footerHeight
+
+    canvas = Image.new('RGBA', (canvasWidth, canvasHeight), (35, 37, 46, 255))
     draw = ImageDraw.Draw(canvas)
 
-    # Load tier icons
     icons = {
-        tier: Image.open(Rank.iconPath[tier]).resize((80, 80), resample=Image.BICUBIC)
+        tier: Image.open(Rank.iconPath[tier]).convert("RGBA").resize((66, 66), resample=Image.BICUBIC)
         for tier in Rank.iconPath
     }
 
-    hotStreakIcon = Image.open('Imgs/Fire emoji.png').resize((30, 30), resample=Image.BICUBIC)
-    coldStreakIcon = Image.open('Imgs/Skull emoji.png').resize((30, 30), resample=Image.BICUBIC)
+    hotStreakIcon = Image.open('Imgs/Fire emoji.png').convert("RGBA").resize((26, 26), resample=Image.BICUBIC)
+    coldStreakIcon = Image.open('Imgs/Skull emoji.png').convert("RGBA").resize((26, 26), resample=Image.BICUBIC)
+    crownIcon = Image.open("Imgs/crown.png").convert("RGBA").resize((32, 32), resample=Image.BICUBIC)
 
-    # Define box parameters
-    boxWidth = 1820
-    boxHeight = 120
-    borderRadius = 60
+    fonts = {
+        "title": ImageFont.truetype("ARIAL.TTF", 42),
+        "subtitle": ImageFont.truetype("ARIAL.TTF", 22),
+        "label": ImageFont.truetype("ARIAL.TTF", 17),
+        "rank": ImageFont.truetype("ARIAL.TTF", 42),
+        "name": ImageFont.truetype("ARIAL.TTF", 35),
+        "tagline": ImageFont.truetype("ARIAL.TTF", 15),
+        "tier": ImageFont.truetype("ARIAL.TTF", 24),
+        "small": ImageFont.truetype("ARIAL.TTF", 16),
+        "change": ImageFont.truetype("ARIAL.TTF", 25),
+        "kda": ImageFont.truetype("ARIAL.TTF", 23),
+        "damage": ImageFont.truetype("ARIAL.TTF", 20),
+        "footer": ImageFont.truetype("ARIAL.TTF", 22),
+    }
 
-    # Define the new box colors
-    firstPlaceColor = (212, 175, 55)  # gold
-    secondPlaceColor = (192, 192, 192)  # silver
-    thirdPlaceColor = (183, 119, 41)  # bronze
+    drawHeader(canvas, daily, fonts, canvasWidth, headerHeight)
 
-    # Write summoners info and tier icons to image
-    fontTitle = ImageFont.truetype("ARIAL.TTF", 120)
-    fontLeaderboardRank = ImageFont.truetype("ARIAL.TTF", 70)
-    fontName = ImageFont.truetype("ARIAL.TTF", 40)
-    fontTagline = ImageFont.truetype("ARIAL.TTF", 16)
-    fontTier = ImageFont.truetype("ARIAL.TTF", 32)
-    fontLp = ImageFont.truetype("ARIAL.TTF", 24)
-    fontKda = ImageFont.truetype('ARIAL.TTF', 25)
+    y = headerHeight
+    for index, summoner in enumerate(summones):
+        drawSummonerRow(canvas, summoner, index, y, daily, icons, hotStreakIcon, coldStreakIcon, crownIcon, fonts)
+        y += rowHeight + rowGap
 
-    y = 0
-    if daily:
-        dateStr = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%y")
-        drawTextCentered(canvas, f"Daily - {dateStr}", 910, 120, fontTitle)
-        y = 240
-    for i, summoner in enumerate(summones):
-        # Determine the box color based on summoner rank
-        if i == 0:
-            boxColor = firstPlaceColor
-        elif i == 1:
-            boxColor = secondPlaceColor
-        elif i == 2:
-            boxColor = thirdPlaceColor
-        else:
-            boxColor = (49, 49, 60, 255)  # default box color
+    footerText = "SLASH COMMANDS: /add, /remove, /mvp, /crown, /list, /patch /chall"
+    drawTextCentered(canvas, footerText, canvasWidth / 2, y + 22, fonts["footer"], (178, 184, 199))
 
-        # Draw box background
-        x = 0
-        boxPos = (x, y, x + boxWidth, y + boxHeight)
-        circleColor = (40, 40, 48, 255)
-        draw.rounded_rectangle(boxPos, borderRadius, boxColor, None)
-        draw.ellipse((x + 120, y + 10, x + 230, y + 110), fill=circleColor)
-        draw.ellipse((x + 10, y + 10, x + 110, y + 110), fill=circleColor)
-
-        # Draw tier icon
-        tierIcon = icons[summoner.tier]
-        canvas.paste(tierIcon, (x + 135, y + 20), tierIcon)
-
-        # draw deltaLeaguePoints
-        if daily:
-            if summoner.deltaDailyScore != 0:
-                draw.ellipse((x + 610, y + 10, x + 710, y + 110), fill=circleColor)
-
-                if summoner.deltaDailyScore > 0:
-                    textBbox = fontName.getbbox(f"+{summoner.deltaDailyScore}")
-                    textWidth = textBbox[2] - textBbox[0]
-                    xCentered = x + 660 - textWidth // 2
-                    draw.text((xCentered, y + 40), f"+{summoner.deltaDailyScore}", (50, 200, 50), font=fontName)
-                else:
-                    textBbox = fontName.getbbox(f"{summoner.deltaDailyScore}")
-                    textWidth = textBbox[2] - textBbox[0]
-                    xCentered = x + 660 - textWidth // 2
-                    draw.text((xCentered, y + 40), f"{summoner.deltaDailyScore}", (200, 50, 50), font=fontName)
-
-            if summoner.deltaDailyScore == 0 and summoner.deltaDailyGamesPlayed != 0:
-                draw.ellipse((x + 610, y + 10, x + 710, y + 110), fill=circleColor)
-                textBbox = fontName.getbbox('-0')
-                textWidth = textBbox[2] - textBbox[0]
-                xCentered = x + 660 - textWidth // 2
-                draw.text((xCentered, y + 40), '-0', (200, 50, 50), font=fontName)
-        else:
-            if summoner.deltaScore != 0:
-                draw.ellipse((x + 610, y + 10, x + 710, y + 110), fill=circleColor)
-
-                if summoner.deltaScore > 0:
-                    textBbox = fontName.getbbox(f"+{summoner.deltaScore}")
-                    textWidth = textBbox[2] - textBbox[0]
-                    xCentered = x + 660 - textWidth // 2
-                    draw.text((xCentered, y + 40), f"+{summoner.deltaScore}", (50, 200, 50), font=fontName)
-                else:
-                    textBbox = fontName.getbbox(f"{summoner.deltaScore}")
-                    textWidth = textBbox[2] - textBbox[0]
-                    xCentered = x + 660 - textWidth // 2
-                    draw.text((xCentered, y + 40), f"{summoner.deltaScore}", (200, 50, 50), font=fontName)
-
-            if summoner.deltaScore == 0 and summoner.deltaGamesPlayed != 0:
-                draw.ellipse((x + 610, y + 10, x + 710, y + 110), fill=circleColor)
-                textBbox = fontName.getbbox('-0')
-                textWidth = textBbox[2] - textBbox[0]
-                xCentered = x + 660 - textWidth // 2
-                draw.text((xCentered, y + 40), '-0', (200, 50, 50), font=fontName)
-
-        # promos
-        # if summoner.series:
-        #     draw.ellipse((x + 500, y + 10, x + 600, y + 110), fill=circleColor)
-        #     textBbox = fontName.getbbox(f"{summoner.seriesWins}-{summoner.seriesLosses}")
-        #     textWidth = textBbox[2] - textBbox[0]
-        #     xCentered = x + 550 - textWidth // 2
-        #     draw.text((xCentered, y + 40), f"{summoner.seriesWins}-{summoner.seriesLosses}", (255, 255, 255), font=fontName)
-
-        # leaderboard Position
-        if daily:
-            if summoner.deltaDailyLeaderboardPosition != 0:
-                draw.ellipse((x + 490, y + 10, x + 590, y + 110), fill=circleColor)
-
-                if summoner.deltaDailyLeaderboardPosition > 0:
-                    triangleCoordsUp = [(x + 530, y + 70), (x + 540, y + 50), (x + 550, y + 70)]
-                    draw.polygon(triangleCoordsUp, fill=(50, 200, 50), outline=(0, 0, 0))
-                else:
-                    triangleCoordsDown = [(x + 530, y + 50), (x + 540, y + 70), (x + 550, y + 50)]
-                    draw.polygon(triangleCoordsDown, fill=(200, 50, 50), outline=(0, 0, 0))
-        else:
-
-            if summoner.deltaLeaderboardPosition != 0:
-                draw.ellipse((x + 490, y + 10, x + 590, y + 110), fill=circleColor)
-
-                if summoner.deltaLeaderboardPosition > 0:
-                    triangleCoordsUp = [(x + 530, y + 70), (x + 540, y + 50), (x + 550, y + 70)]
-                    draw.polygon(triangleCoordsUp, fill=(50, 200, 50), outline=(0, 0, 0))
-                else:
-                    triangleCoordsDown = [(x + 530, y + 50), (x + 540, y + 70), (x + 550, y + 50)]
-                    draw.polygon(triangleCoordsDown, fill=(200, 50, 50), outline=(0, 0, 0))
-
-        draw.rounded_rectangle((x + 110 + + 620, y + 10, x + 110 + + 820, y + 110), borderRadius, circleColor, None)
-        drawChampionImage(canvas, 730, y + 10, summoner.game1Champion, summoner.game1Win, summoner.game1Remake, summoner.game1Mvp)
-        draw.text((835, y + 30), f"{summoner.game1Kills}/{summoner.game1Deaths}/{summoner.game1Assists}", (255, 255, 255), fontKda)
-        draw.text((835, y + 60), formatDamage(summoner.game1DamageDealtToChampions), (255, 255, 255), fontKda)
-        # draw.text((835, y + 90), formatDamage(round(summoner.game1MvpScore, 2)), (255, 255, 255), fontKda)
-
-        draw.rounded_rectangle((x + 110 + + 840, y + 10, x + 110 + + 1040, y + 110), borderRadius, circleColor, None)
-        drawChampionImage(canvas, 950, y + 10, summoner.game2Champion, summoner.game2Win, summoner.game2Remake, summoner.game2Mvp)
-        draw.text((1055, y + 30), f"{summoner.game2Kills}/{summoner.game2Deaths}/{summoner.game2Assists}", (255, 255, 255), fontKda)
-        draw.text((1055, y + 60), formatDamage(summoner.game2DamageDealtToChampions), (255, 255, 255), fontKda)
-        # draw.text((1055, y + 90), formatDamage(round(summoner.game2MvpScore, 2)), (255, 255, 255), fontKda)
-
-        draw.rounded_rectangle((x + 110 + + 1060, y + 10, x + 110 + + 1260, y + 110), borderRadius, circleColor, None)
-        drawChampionImage(canvas, 1170, y + 10, summoner.game3Champion, summoner.game3Win, summoner.game3Remake, summoner.game3Mvp)
-        draw.text((1275, y + 30), f"{summoner.game3Kills}/{summoner.game3Deaths}/{summoner.game3Assists}", (255, 255, 255), fontKda)
-        draw.text((1275, y + 60), formatDamage(summoner.game3DamageDealtToChampions), (255, 255, 255), fontKda)
-        # draw.text((1275, y + 90), formatDamage(round(summoner.game3MvpScore, 2)), (255, 255, 255), fontKda)
-
-        draw.rounded_rectangle((x + 110 + + 1280, y + 10, x + 110 + + 1480, y + 110), borderRadius, circleColor, None)
-        drawChampionImage(canvas, 1390, y + 10, summoner.game4Champion, summoner.game4Win, summoner.game4Remake, summoner.game4Mvp)
-        draw.text((1495, y + 30), f"{summoner.game4Kills}/{summoner.game4Deaths}/{summoner.game4Assists}", (255, 255, 255), fontKda)
-        draw.text((1495, y + 60), formatDamage(summoner.game4DamageDealtToChampions), (255, 255, 255), fontKda)
-        # draw.text((1495, y + 90), formatDamage(round(summoner.game4MvpScore, 2)), (255, 255, 255), fontKda)
-
-        draw.rounded_rectangle((x + 110 + + 1500, y + 10, x + 110 + + 1700, y + 110), borderRadius, circleColor, None)
-        drawChampionImage(canvas, 1610, y + 10, summoner.game5Champion, summoner.game5Win, summoner.game5Remake, summoner.game5Mvp)
-        draw.text((1715, y + 30), f"{summoner.game5Kills}/{summoner.game5Deaths}/{summoner.game5Assists}", (255, 255, 255), fontKda)
-        draw.text((1715, y + 60), formatDamage(summoner.game5DamageDealtToChampions), (255, 255, 255), fontKda)
-        # draw.text((1715, y + 90), formatDamage(round(summoner.game5MvpScore, 2)), (255, 255, 255), fontKda)
-
-        # Calculate the length of the summoner.name
-        nameLength = draw.textlength(summoner.name, font=fontName)
-
-        # Draw summoner name with fontName
-        draw.text((x + 240, y + 10), summoner.name, (255, 255, 255), font=fontName)
-
-        # Draw summoner tagline with fontLp after the summoner.name
-        draw.text((x + 240 + nameLength + 5, y + 31), f"#{summoner.tagline}", (255, 255, 255), font=fontTagline)
-
-        # Draw hot streak
-        if summoner.hotStreak:
-            taglineLength = draw.textlength(f"#{summoner.tagline}", font=fontTagline)
-
-            canvas.paste(hotStreakIcon, (x + 245 + int(nameLength + taglineLength), y + 17), hotStreakIcon)
-
-        lossesInARow = 0
-        for i in range(5):
-            if not summoner.__dict__.get(f'game{i + 1}Remake'):
-                if not summoner.__dict__.get(f'game{i + 1}Win'):
-                    lossesInARow += 1
-                else:
-                    break
-
-        # crown
-        if summoner.hasCrown:
-            crown = Image.open("Imgs/crown.png").convert("RGBA")
-            canvas.paste(crown, (x + 157, y + 17), crown)
-
-        # Draw loss streak
-        if lossesInARow >= 3:
-            taglineLength = draw.textlength(f"#{summoner.tagline}", font=fontTagline)
-            canvas.paste(coldStreakIcon, (x + 245 + int(nameLength + taglineLength), y + 17), coldStreakIcon)
-
-        # Draw summoner tier and rank
-        draw.text((x + 240, y + 54), f"{summoner.tier} {Rank.rankToNumber(summoner.rank)}", (255, 255, 255), font=fontTier)
-        draw.text((x + 240, y + 90), f"{summoner.leaguePoints} LP {summoner.wins}/{summoner.losses} {round(summoner.wins / (summoner.wins + summoner.losses) * 100, 1)}%", (255, 255, 255), font=fontLp)
-        # draw.text((x + 1720, y + 20), , (255, 255, 255), font=fontLeaderboardRank)
-        drawTextCentered(canvas, f"{summoner.leaderboardPosition}", x + 60, y + 50, fontLeaderboardRank)
-
-        # Increment y position for next summoners
-        y += boxHeight + 20
-
-        drawTextCentered(canvas, "SLASH COMMANDS: /add, /remove, /mvp, /crown, /list, /patch /chall", 910, y + 10, fontTier)
-
-    # Save image to file and show it
     if daily:
         canvas.save('Daily Rank list.png')
     else:
         canvas.save('Rank list.png')
-    # canvas.show()
