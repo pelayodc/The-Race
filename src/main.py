@@ -30,10 +30,26 @@ def rank_icon(tier):
 
 def delta_text(value):
     if value > 0:
-        return f" ↑ +{value}"
+        return f" (+{value})"
     if value < 0:
-        return f" ↓ {value}"
+        return f" ({value})"
     return ""
+
+
+def recent_results_text(summoner):
+    results = []
+    for game in range(1, 6):
+        remake = getattr(summoner, f"game{game}Remake", False)
+        win = getattr(summoner, f"game{game}Win", None)
+        if remake:
+            results.append("➖")
+        elif win is True:
+            results.append("✅")
+        elif win is False:
+            results.append("❌")
+        else:
+            results.append("▫️")
+    return "".join(results)
 
 
 def leaderboard_embed(summoners, daily=False, date_str=None):
@@ -50,6 +66,7 @@ def leaderboard_embed(summoners, daily=False, date_str=None):
 
     summoner_lines = []
     rank_lines = []
+    results_lines = []
 
     for summoner in summoners:
         rank = f"#{summoner.leaderboardPosition}"
@@ -62,12 +79,13 @@ def leaderboard_embed(summoners, daily=False, date_str=None):
         games_delta = summoner.deltaDailyGamesPlayed if daily else summoner.deltaGamesPlayed
         lp_delta = delta_text(score_delta)
         if score_delta == 0 and games_delta:
-            lp_delta = " ↓ -0"
+            lp_delta = " (-0)"
 
         tier_rank = f"{summoner.tier} {summoner.rank}"
         lp = f"{summoner.leaguePoints} LP"
         line_left = f"**{rank}** {name}"
-        line_right = f"{rank_icon(summoner.tier)} {tier_rank} - **{lp}**{lp_delta}"
+        line_right = f"{rank_icon(summoner.tier)} {tier_rank} - **{lp}** {lp_delta}".rstrip()
+        line_results = recent_results_text(summoner)
         if position_delta > 0:
             line_left += " ▲"
         elif position_delta < 0:
@@ -77,12 +95,16 @@ def leaderboard_embed(summoners, daily=False, date_str=None):
             break
         if len("\n".join(rank_lines + [line_right])) > 1024:
             break
+        if len("\n".join(results_lines + [line_results])) > 1024:
+            break
 
         summoner_lines.append(line_left)
         rank_lines.append(line_right)
+        results_lines.append(line_results)
 
     embed.add_field(name="Summoners", value="\n".join(summoner_lines) or "-", inline=True)
     embed.add_field(name="Ranks", value="\n".join(rank_lines) or "-", inline=True)
+    embed.add_field(name="Last 5", value="\n".join(results_lines) or "-", inline=True)
     embed.set_footer(text="Updated leaderboard")
     return embed
 
