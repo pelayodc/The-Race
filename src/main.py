@@ -70,9 +70,16 @@ def leaderboard_embed(summoners, daily=False, date_str=None):
 
     for summoner in summoners:
         rank = f"#{summoner.leaderboardPosition}"
-        name = summoner.name
-        if len(name) > 18:
-            name = f"{name[:15]}..."
+        raw_name = summoner.name
+        tag = summoner.tag
+
+        display_name = raw_name
+        if len(display_name) > 18:
+            display_name = f"{display_name[:15]}..."
+
+        safe_game_name = raw_name.replace(" ", "%20")
+        safe_tag = tag.replace(" ", "%20")
+        name = f"[{display_name}](https://dpm.lol/{safe_game_name}-{safe_tag})"
 
         score_delta = summoner.deltaDailyScore if daily else summoner.deltaScore
         position_delta = summoner.deltaDailyLeaderboardPosition if daily else summoner.deltaLeaderboardPosition
