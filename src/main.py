@@ -295,7 +295,7 @@ def find_summoner_key(json_data, name, tagline):
 
 
 def format_summoner_summary(json_data):
-    summoners = list((json_data.get("summoners") or {}).keys())
+    summoners = [summoner for summoner in (json_data.get("summoners") or {}).keys()]
     if not summoners:
         return "No summoners configured."
 
@@ -798,7 +798,7 @@ class SettingsAdminView(disnake.ui.View):
 class LeaderboardUsersAdminView(disnake.ui.View):
     def __init__(self, json_data):
         super().__init__(timeout=300)
-        summoners = list((json_data.get("summoners") or {}).keys())
+        summoners = [summoner for summoner in (json_data.get("summoners") or {}).keys()]
         if summoners:
             self.add_item(LeaderboardRemoveSelect(summoners))
 
