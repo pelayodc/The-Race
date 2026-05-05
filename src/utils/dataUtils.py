@@ -258,7 +258,17 @@ def fetchAllSummonerData(force, daily):
         summoner.region = jsonData["summoners"][summonerName]["region"]
         # print(f'Fetching {summoner.fullName} rank data')
         try:
-            riotApiData = requests.get(f'https://{summoner.platform}.api.riotgames.com/lol/league/v4/entries/by-puuid/{summoner.puuid}?api_key={riotApKey}').json()
+            response = requests.get(f'https://{summoner.platform}.api.riotgames.com/lol/league/v4/entries/by-puuid/{summoner.puuid}?api_key={riotApKey}')
+            if response.status_code != 200:
+                failedSummoners.append(summoner.fullName)
+                print(f"Failed to fetch rank data for {summoner.fullName}: status code {response.status_code}, response: {response.text[:200]}")
+                continue
+
+            riotApiData = response.json()
+            if not isinstance(riotApiData, list):
+                failedSummoners.append(summoner.fullName)
+                print(f"Failed to fetch rank data for {summoner.fullName}: unexpected response: {riotApiData}")
+                continue
 
             for data in riotApiData:
                 if data['queueType'] == 'RANKED_SOLO_5x5':
@@ -275,6 +285,10 @@ def fetchAllSummonerData(force, daily):
                         summoner.seriesLosses = data['miniSeries']['losses']
                     else:
                         summoner.series = False
+
+            if summoner.tier is None:
+                print(f"{summoner.fullName} is unranked")
+                continue
 
             summoner.previousScore = jsonData["summoners"][summonerName]["score"]
             summoner.score = Rank.calculateScore(summoner.tier, summoner.rank, summoner.leaguePoints)
@@ -293,7 +307,7 @@ def fetchAllSummonerData(force, daily):
 
             summoners.append(summoner)
 
-        except Exception as error:
+        except (KeyError, TypeError, ValueError) as error:
             failedSummoners.append(summoner.fullName)
             print(f"Failed to fetch rank data for {summoner.fullName}: {error}")
 

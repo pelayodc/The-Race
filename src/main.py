@@ -153,6 +153,7 @@ def ensure_matchmaking_state(json_data):
     json_data.setdefault("matchmakingQueue", [])
     json_data.setdefault("matchmakingSeparateChannels", False)
     json_data.setdefault("matchmakingTeamChannelIds", [])
+    json_data.setdefault("matchmakingInProgress", False)
     return json_data
 
 
@@ -274,7 +275,7 @@ class MatchmakingView(disnake.ui.View):
         queue = json_data["matchmakingQueue"]
         active_queue = []
         for player in queue:
-            member = inter.guild.get_member(int(player["userId"]))
+            member = await get_guild_member(inter.guild, player["userId"])
             if member and member.voice and member.voice.channel:
                 player["voiceChannelId"] = member.voice.channel.id
                 active_queue.append(player)
@@ -294,6 +295,9 @@ class MatchmakingView(disnake.ui.View):
         if len(queue) > 10:
             await inter.followup.send("The queue cannot contain more than 10 players.", ephemeral=True)
             return
+
+        json_data["matchmakingInProgress"] = True
+        writeToJsonFile(jsonFile, json_data)
 
         players = queue[:]
         random.shuffle(players)
@@ -317,14 +321,16 @@ class MatchmakingView(disnake.ui.View):
                 created_channels = [team_one_channel.id, team_two_channel.id]
 
                 for player in team_one:
-                    member = inter.guild.get_member(int(player["userId"]))
+                    member = await get_guild_member(inter.guild, player["userId"])
                     if member and member.voice:
                         await member.move_to(team_one_channel)
                 for player in team_two:
-                    member = inter.guild.get_member(int(player["userId"]))
+                    member = await get_guild_member(inter.guild, player["userId"])
                     if member and member.voice:
                         await member.move_to(team_two_channel)
             except disnake.Forbidden:
+                json_data["matchmakingInProgress"] = False
+                writeToJsonFile(jsonFile, json_data)
                 for channel_id in created_channels:
                     channel = inter.guild.get_channel(int(channel_id))
                     if channel:
@@ -335,6 +341,8 @@ class MatchmakingView(disnake.ui.View):
                 await inter.followup.send("I do not have permission to create voice channels or move members.", ephemeral=True)
                 return
             except disnake.HTTPException:
+                json_data["matchmakingInProgress"] = False
+                writeToJsonFile(jsonFile, json_data)
                 for channel_id in created_channels:
                     channel = inter.guild.get_channel(int(channel_id))
                     if channel:
@@ -347,6 +355,7 @@ class MatchmakingView(disnake.ui.View):
 
         json_data["matchmakingQueue"] = []
         json_data["matchmakingTeamChannelIds"] = created_channels
+        json_data["matchmakingInProgress"] = False
         writeToJsonFile(jsonFile, json_data)
         await refresh_matchmaking_message(inter.channel, json_data)
 
@@ -384,6 +393,16 @@ async def setup_matchmaking_message():
         print("Matchmaking message was not created because the configured channel was not found.")
         return None
     return await refresh_matchmaking_message(channel)
+
+
+async def get_guild_member(guild, user_id):
+    member = guild.get_member(int(user_id))
+    if member:
+        return member
+    try:
+        return await guild.fetch_member(int(user_id))
+    except (disnake.NotFound, disnake.Forbidden, disnake.HTTPException):
+        return None
 
 
 async def delete_empty_matchmaking_team_channels(guild):
@@ -430,6 +449,10 @@ if __name__ == "__main__":
     @bot.event
     async def on_voice_state_update(member, before, after):
         json_data = ensure_matchmaking_state(load_json_data())
+        if json_data.get("matchmakingInProgress"):
+            await delete_empty_matchmaking_team_channels(member.guild)
+            return
+
         queue = json_data["matchmakingQueue"]
         index = user_queue_index(queue, member.id)
         queue_changed = False
