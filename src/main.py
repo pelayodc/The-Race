@@ -149,6 +149,67 @@ def load_json_data():
     return openJsonFile(jsonFile) or {}
 
 
+def configured_channel_id(json_data, key):
+    try:
+        return int(json_data.get(key) or discordChannel)
+    except (TypeError, ValueError):
+        return discordChannel
+
+
+def leaderboard_channel_id(json_data):
+    return configured_channel_id(json_data, "leaderboardChannelId")
+
+
+def matchmaking_channel_id(json_data):
+    return configured_channel_id(json_data, "matchmakingChannelId")
+
+
+async def fetch_configured_message(channel_id, message_id):
+    if not message_id:
+        return None
+    channel = await get_discord_channel(channel_id)
+    if not channel:
+        return None
+    try:
+        return await channel.fetch_message(int(message_id))
+    except (disnake.NotFound, disnake.Forbidden, disnake.HTTPException, ValueError):
+        return None
+
+
+async def delete_configured_message(channel_id, message_id):
+    message = await fetch_configured_message(channel_id, message_id)
+    if not message:
+        return False
+    try:
+        await message.delete()
+        return True
+    except (disnake.NotFound, disnake.Forbidden, disnake.HTTPException):
+        return False
+
+
+def can_configure_channels(inter):
+    permissions = getattr(inter.author, "guild_permissions", None)
+    return bool(permissions and permissions.manage_guild)
+
+
+def missing_bot_channel_permissions(channel, bot_member):
+    if bot_member is None:
+        return ["bot member lookup"]
+
+    permissions = channel.permissions_for(bot_member)
+    required_permissions = {
+        "view_channel": "View Channel",
+        "send_messages": "Send Messages",
+        "embed_links": "Embed Links",
+        "read_message_history": "Read Message History"
+    }
+    missing = []
+    for permission, label in required_permissions.items():
+        if not getattr(permissions, permission, False):
+            missing.append(label)
+    return missing
+
+
 def ensure_matchmaking_state(json_data):
     json_data.setdefault("matchmakingQueue", [])
     json_data.setdefault("matchmakingSeparateChannels", False)
@@ -388,11 +449,12 @@ async def refresh_matchmaking_message(channel, json_data=None):
 
 
 async def setup_matchmaking_message():
-    channel = await get_discord_channel(discordChannel)
+    json_data = ensure_matchmaking_state(load_json_data())
+    channel = await get_discord_channel(matchmaking_channel_id(json_data))
     if not channel:
         print("Matchmaking message was not created because the configured channel was not found.")
         return None
-    return await refresh_matchmaking_message(channel)
+    return await refresh_matchmaking_message(channel, json_data)
 
 
 async def get_guild_member(guild, user_id):
@@ -467,7 +529,7 @@ if __name__ == "__main__":
 
         if queue_changed:
             writeToJsonFile(jsonFile, json_data)
-            channel = await get_discord_channel(discordChannel)
+            channel = await get_discord_channel(matchmaking_channel_id(json_data))
             if channel:
                 await refresh_matchmaking_message(channel, json_data)
 
@@ -526,7 +588,7 @@ if __name__ == "__main__":
             force_leaderboard = not json_data.get("leaderboardMessageId")
             summoners, updated = update(force_leaderboard, True, returnData=True, generate=False)
             if summoners and (updated or force_leaderboard):
-                channel = await get_discord_channel(discordChannel)
+                channel = await get_discord_channel(leaderboard_channel_id(json_data))
                 if not channel:
                     return
                 latest_json_data = openJsonFile(jsonFile)
@@ -536,7 +598,7 @@ if __name__ == "__main__":
             force_leaderboard = not json_data.get("leaderboardMessageId")
             summoners, updated = update(force_leaderboard, False, returnData=True, generate=False)
             if summoners and (updated or force_leaderboard):
-                channel = await get_discord_channel(discordChannel)
+                channel = await get_discord_channel(leaderboard_channel_id(json_data))
                 if not channel:
                     return
                 latest_json_data = openJsonFile(jsonFile)
@@ -606,6 +668,83 @@ if __name__ == "__main__":
             await inter.send(f"Matchmaking message ready: {message_id}", ephemeral=True)
         else:
             await inter.send("Could not create the matchmaking message. Check the configured channel and bot permissions.", ephemeral=True)
+
+
+    @bot.slash_command(description="Set the channel for the editable leaderboard message")
+    async def setrankingchannel(inter: ApplicationCommandInteraction, channel: disnake.TextChannel):
+        await inter.response.defer(ephemeral=True)
+        if not inter.guild:
+            await inter.send("This command can only be used inside a server.", ephemeral=True)
+            return
+        if not can_configure_channels(inter):
+            await inter.send("You need Manage Server permission to change bot channels.", ephemeral=True)
+            return
+
+        bot_member = inter.guild.me or await get_guild_member(inter.guild, bot.user.id)
+        missing_permissions = missing_bot_channel_permissions(channel, bot_member)
+        if missing_permissions:
+            await inter.send(f"I am missing permissions in {channel.mention}: {', '.join(missing_permissions)}.", ephemeral=True)
+            return
+
+        json_data = load_json_data()
+        old_channel_id = leaderboard_channel_id(json_data)
+        old_message_id = json_data.get("leaderboardMessageId")
+        old_message = await fetch_configured_message(old_channel_id, old_message_id)
+        old_embed = old_message.embeds[0] if old_message and old_message.embeds else None
+
+        json_data["leaderboardChannelId"] = channel.id
+        if old_message_id and old_message is None:
+            json_data["leaderboardMessageId"] = None
+
+        moved_message = None
+        if old_channel_id != channel.id:
+            json_data["leaderboardMessageId"] = None
+            if old_embed:
+                moved_message = await channel.send(embed=old_embed)
+                json_data["leaderboardMessageId"] = moved_message.id
+            await delete_configured_message(old_channel_id, old_message_id)
+
+        writeToJsonFile(jsonFile, json_data)
+
+        if moved_message:
+            await inter.send(f"Leaderboard channel set to {channel.mention}. Current embed moved.", ephemeral=True)
+        elif json_data.get("leaderboardMessageId"):
+            await inter.send(f"Leaderboard channel set to {channel.mention}.", ephemeral=True)
+        else:
+            await inter.send(f"Leaderboard channel set to {channel.mention}. The message will be created on the next leaderboard update.", ephemeral=True)
+
+
+    @bot.slash_command(description="Set the channel for the matchmaking message")
+    async def setmatchmakingchannel(inter: ApplicationCommandInteraction, channel: disnake.TextChannel):
+        await inter.response.defer(ephemeral=True)
+        if not inter.guild:
+            await inter.send("This command can only be used inside a server.", ephemeral=True)
+            return
+        if not can_configure_channels(inter):
+            await inter.send("You need Manage Server permission to change bot channels.", ephemeral=True)
+            return
+
+        bot_member = inter.guild.me or await get_guild_member(inter.guild, bot.user.id)
+        missing_permissions = missing_bot_channel_permissions(channel, bot_member)
+        if missing_permissions:
+            await inter.send(f"I am missing permissions in {channel.mention}: {', '.join(missing_permissions)}.", ephemeral=True)
+            return
+
+        json_data = ensure_matchmaking_state(load_json_data())
+        old_channel_id = matchmaking_channel_id(json_data)
+        old_message_id = json_data.get("matchmakingMessageId")
+
+        json_data["matchmakingChannelId"] = channel.id
+        if old_channel_id != channel.id:
+            json_data["matchmakingMessageId"] = None
+
+        writeToJsonFile(jsonFile, json_data)
+        message_id = await refresh_matchmaking_message(channel, json_data)
+
+        if old_channel_id != channel.id:
+            await delete_configured_message(old_channel_id, old_message_id)
+
+        await inter.send(f"Matchmaking channel set to {channel.mention}. Message ready: {message_id}", ephemeral=True)
 
 
     @bot.slash_command(description="breakdown of mvp score for a given game")
