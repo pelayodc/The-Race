@@ -1035,7 +1035,7 @@ class AdminView(disnake.ui.View):
         await inter.response.send_message(embed=status_admin_embed(json_data), view=StatusLogsAdminView(), ephemeral=True)
 
     @disnake.ui.button(label="Refresh", style=disnake.ButtonStyle.gray, custom_id="admin:refresh")
-    async def refresh(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+    async def refresh_admin_panel(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
         if not await require_admin_interaction(inter):
             return
 
