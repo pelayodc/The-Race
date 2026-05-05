@@ -140,7 +140,8 @@ async def get_discord_channel(channel_id):
         return channel
     try:
         return await bot.fetch_channel(channel_id)
-    except (disnake.Forbidden, disnake.NotFound, disnake.HTTPException):
+    except (disnake.Forbidden, disnake.NotFound, disnake.HTTPException) as error:
+        print(f"Could not fetch Discord channel {channel_id}: {error}")
         return None
 
 
@@ -364,14 +365,25 @@ async def refresh_matchmaking_message(channel, json_data=None):
         try:
             message = await channel.fetch_message(int(message_id))
             await message.edit(content=None, embed=embed, view=view)
+            print(f"Updated matchmaking message {message.id}")
             return message.id
-        except (disnake.NotFound, disnake.Forbidden, disnake.HTTPException, ValueError):
+        except (disnake.NotFound, disnake.Forbidden, disnake.HTTPException, ValueError) as error:
+            print(f"Could not update matchmaking message {message_id}: {error}")
             pass
 
     message = await channel.send(embed=embed, view=view)
     json_data["matchmakingMessageId"] = message.id
     writeToJsonFile(jsonFile, json_data)
+    print(f"Created matchmaking message {message.id}")
     return message.id
+
+
+async def setup_matchmaking_message():
+    channel = await get_discord_channel(discordChannel)
+    if not channel:
+        print("Matchmaking message was not created because the configured channel was not found.")
+        return None
+    return await refresh_matchmaking_message(channel)
 
 
 async def delete_empty_matchmaking_team_channels(guild):
@@ -409,9 +421,7 @@ if __name__ == "__main__":
         if not matchmaking_view_registered:
             bot.add_view(MatchmakingView())
             matchmaking_view_registered = True
-        channel = await get_discord_channel(discordChannel)
-        if channel:
-            await refresh_matchmaking_message(channel)
+        await setup_matchmaking_message()
         if not updateRaceImage.is_running():
             updateRaceImage.start()
             updatePatchNotes.start()
@@ -556,6 +566,16 @@ if __name__ == "__main__":
                 await inter.send(message)
         else:
             await inter.send("Could not fetch the latest patch notes.")
+
+
+    @bot.slash_command(description="Create or refresh the matchmaking message")
+    async def matchmaking(inter: ApplicationCommandInteraction):
+        await inter.response.defer(ephemeral=True)
+        message_id = await setup_matchmaking_message()
+        if message_id:
+            await inter.send(f"Matchmaking message ready: {message_id}", ephemeral=True)
+        else:
+            await inter.send("Could not create the matchmaking message. Check the configured channel and bot permissions.", ephemeral=True)
 
 
     @bot.slash_command(description="breakdown of mvp score for a given game")
