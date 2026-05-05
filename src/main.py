@@ -12,6 +12,7 @@ from utils.jsonUtils import openJsonFile, writeToJsonFile
 
 bot = commands.InteractionBot()
 matchmaking_view_registered = False
+MAX_SELECT_OPTIONS = 25
 
 
 def rank_icon(tier):
@@ -164,6 +165,10 @@ def matchmaking_channel_id(json_data):
     return configured_channel_id(json_data, "matchmakingChannelId")
 
 
+def admin_channel_id(json_data):
+    return configured_channel_id(json_data, "adminChannelId")
+
+
 async def fetch_configured_message(channel_id, message_id):
     if not message_id:
         return None
@@ -210,12 +215,52 @@ def missing_bot_channel_permissions(channel, bot_member):
     return missing
 
 
+async def send_ephemeral(inter, message=None, embed=None, view=None):
+    if inter.response.is_done():
+        await inter.followup.send(message, embed=embed, view=view, ephemeral=True)
+    else:
+        await inter.response.send_message(message, embed=embed, view=view, ephemeral=True)
+
+
+async def require_admin_interaction(inter):
+    if not inter.guild:
+        await send_ephemeral(inter, "This action can only be used inside a server.")
+        return False
+    if not can_configure_channels(inter):
+        await send_ephemeral(inter, "You need Manage Server permission to use administration.")
+        return False
+    return True
+
+
 def ensure_matchmaking_state(json_data):
     json_data.setdefault("matchmakingQueue", [])
     json_data.setdefault("matchmakingSeparateChannels", False)
+    json_data.setdefault("matchmakingSeparateChannelsForced", None)
     json_data.setdefault("matchmakingTeamChannelIds", [])
     json_data.setdefault("matchmakingInProgress", False)
     return json_data
+
+
+def ensure_admin_state(json_data):
+    ensure_matchmaking_state(json_data)
+    json_data.setdefault("adminMessageId", None)
+    return json_data
+
+
+def effective_matchmaking_separate_channels(json_data):
+    forced_mode = json_data.get("matchmakingSeparateChannelsForced")
+    if forced_mode is not None:
+        return forced_mode
+    return json_data.get("matchmakingSeparateChannels", False)
+
+
+def forced_mode_text(json_data):
+    forced_mode = json_data.get("matchmakingSeparateChannelsForced")
+    if forced_mode is True:
+        return "Forced on"
+    if forced_mode is False:
+        return "Forced off"
+    return "Unlocked"
 
 
 def user_queue_index(queue, user_id):
@@ -236,15 +281,53 @@ def remove_user_from_matchmaking_queue(json_data, user_id):
     return True
 
 
+def normalize_tagline(tagline):
+    return tagline.replace("#", "").strip()
+
+
+def find_summoner_key(json_data, name, tagline):
+    summoners = json_data.get("summoners") or {}
+    summoner_full_name = f"{name}#{normalize_tagline(tagline)}"
+    for summoner in summoners:
+        if summoner.lower() == summoner_full_name.lower():
+            return summoner
+    return None
+
+
+def format_summoner_summary(json_data):
+    summoners = list((json_data.get("summoners") or {}).keys())
+    if not summoners:
+        return "No summoners configured."
+
+    visible_summoners = summoners[:10]
+    summary = "\n".join(f"- {summoner}" for summoner in visible_summoners)
+    if len(summoners) > len(visible_summoners):
+        summary += f"\n...and {len(summoners) - len(visible_summoners)} more."
+    return summary
+
+
+def format_matchmaking_queue(json_data):
+    queue = json_data.get("matchmakingQueue", [])
+    if not queue:
+        return "No players in queue."
+
+    players = []
+    for index, player in enumerate(queue, start=1):
+        voice = f"<#{player['voiceChannelId']}>" if player.get("voiceChannelId") else "No voice channel"
+        players.append(f"**{index}.** <@{player['userId']}> - {voice}")
+    return "\n".join(players)
+
+
 def matchmaking_embed(json_data):
     ensure_matchmaking_state(json_data)
     queue = json_data["matchmakingQueue"]
-    separate_channels = json_data["matchmakingSeparateChannels"]
+    separate_channels = effective_matchmaking_separate_channels(json_data)
+    mode_text = forced_mode_text(json_data)
     ready_text = "Ready to start" if len(queue) >= 2 else "Waiting for at least 2 players"
 
     embed = disnake.Embed(
         title="Matchmaking",
-        description=f"{ready_text}\nPlayers: **{len(queue)}/10**\nSeparate channels: **{'On' if separate_channels else 'Off'}**",
+        description=f"{ready_text}\nPlayers: **{len(queue)}/10**\nSeparate channels: **{'On' if separate_channels else 'Off'}**\nAdmin lock: **{mode_text}**",
         colour=disnake.Colour.blurple(),
         timestamp=datetime.now()
     )
@@ -266,6 +349,239 @@ def matchmaking_embed(json_data):
     )
     embed.set_footer(text="Join requires being in a voice channel.")
     return embed
+
+
+def admin_embed(json_data):
+    ensure_admin_state(json_data)
+    summoners = json_data.get("summoners") or {}
+    queue = json_data.get("matchmakingQueue", [])
+    leaderboard_channel = leaderboard_channel_id(json_data)
+    matchmaking_channel = matchmaking_channel_id(json_data)
+    admin_channel = admin_channel_id(json_data)
+
+    embed = disnake.Embed(
+        title="Administration",
+        description="Use the buttons below to open private administration panels.",
+        colour=disnake.Colour.dark_teal(),
+        timestamp=datetime.now()
+    )
+    embed.add_field(name="Leaderboard channel", value=f"<#{leaderboard_channel}>", inline=True)
+    embed.add_field(name="Matchmaking channel", value=f"<#{matchmaking_channel}>", inline=True)
+    embed.add_field(name="Admin channel", value=f"<#{admin_channel}>", inline=True)
+    embed.add_field(name="Leaderboard users", value=str(len(summoners)), inline=True)
+    embed.add_field(name="Matchmaking queue", value=f"{len(queue)}/10", inline=True)
+    embed.add_field(name="Separate channels", value=f"{'On' if effective_matchmaking_separate_channels(json_data) else 'Off'} ({forced_mode_text(json_data)})", inline=True)
+    embed.set_footer(text="Administration actions require Manage Server.")
+    return embed
+
+
+async def refresh_configured_matchmaking_message(json_data=None):
+    json_data = ensure_matchmaking_state(json_data or load_json_data())
+    channel = await get_discord_channel(matchmaking_channel_id(json_data))
+    if not channel:
+        return None
+    return await refresh_matchmaking_message(channel, json_data)
+
+
+async def refresh_configured_admin_message(json_data=None):
+    json_data = ensure_admin_state(json_data or load_json_data())
+    if not json_data.get("adminChannelId"):
+        return None
+    channel = await get_discord_channel(admin_channel_id(json_data))
+    if not channel:
+        return None
+    return await refresh_admin_message(channel, json_data)
+
+
+async def add_summoner_to_data(name, tagline, platform, region):
+    json_data = load_json_data()
+    json_data.setdefault("summoners", {})
+    tagline = normalize_tagline(tagline)
+    summoner_full_name = f"{name}#{tagline}"
+
+    if find_summoner_key(json_data, name, tagline):
+        return False, f"{summoner_full_name} is already added"
+
+    response = requests.get(
+        f'https://{region}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{name}/{tagline}?api_key={riotApKey}'
+    )
+    if response.status_code != 200:
+        return False, f"Invalid summoner: {summoner_full_name}"
+
+    account_data = response.json()
+    summoner_full_name = account_data['gameName'] + '#' + account_data['tagLine']
+    summoner_puuid = account_data['puuid']
+
+    response = requests.get(
+        f'https://{platform}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/{summoner_puuid}?api_key={riotApKey}'
+    )
+    if response.status_code != 200:
+        return False, f"Could not fetch summoner profile for {summoner_full_name}"
+
+    summoner_data = response.json()
+    json_data["summoners"][summoner_full_name] = {
+        "id": summoner_data['puuid'],
+        "puuid": summoner_puuid,
+        "profileIconId": 123,
+        "platform": platform,
+        "region": region,
+        "score": 0,
+        "dailyScore": 0,
+        "leaderboardPosition": 100,
+        "dailyLeaderboardPosition": 100,
+        "gamesPlayed": 0,
+        "dailyGamesPlayed": 0
+    }
+
+    writeToJsonFile(jsonFile, json_data)
+    return True, f"{summoner_full_name} added"
+
+
+def remove_summoner_from_data(name, tagline):
+    json_data = load_json_data()
+    summoner_key = find_summoner_key(json_data, name, tagline)
+    if not summoner_key:
+        return False, f"{name}#{normalize_tagline(tagline)} has not been added"
+
+    del json_data["summoners"][summoner_key]
+    writeToJsonFile(jsonFile, json_data)
+    return True, f"{summoner_key} removed"
+
+
+async def configure_leaderboard_channel(channel):
+    json_data = load_json_data()
+    old_channel_id = leaderboard_channel_id(json_data)
+    old_message_id = json_data.get("leaderboardMessageId")
+    old_message = await fetch_configured_message(old_channel_id, old_message_id)
+    old_embed = old_message.embeds[0] if old_message and old_message.embeds else None
+
+    json_data["leaderboardChannelId"] = channel.id
+    if old_message_id and old_message is None:
+        json_data["leaderboardMessageId"] = None
+
+    moved_message = None
+    if old_channel_id != channel.id:
+        json_data["leaderboardMessageId"] = None
+        if old_embed:
+            moved_message = await channel.send(embed=old_embed)
+            json_data["leaderboardMessageId"] = moved_message.id
+        await delete_configured_message(old_channel_id, old_message_id)
+
+    writeToJsonFile(jsonFile, json_data)
+    await refresh_configured_admin_message(json_data)
+
+    if moved_message:
+        return f"Leaderboard channel set to {channel.mention}. Current embed moved."
+    if json_data.get("leaderboardMessageId"):
+        return f"Leaderboard channel set to {channel.mention}."
+    return f"Leaderboard channel set to {channel.mention}. The message will be created on the next leaderboard update."
+
+
+async def configure_matchmaking_channel(channel):
+    json_data = ensure_matchmaking_state(load_json_data())
+    old_channel_id = matchmaking_channel_id(json_data)
+    old_message_id = json_data.get("matchmakingMessageId")
+
+    json_data["matchmakingChannelId"] = channel.id
+    if old_channel_id != channel.id:
+        json_data["matchmakingMessageId"] = None
+
+    writeToJsonFile(jsonFile, json_data)
+    message_id = await refresh_matchmaking_message(channel, json_data)
+
+    if old_channel_id != channel.id:
+        await delete_configured_message(old_channel_id, old_message_id)
+
+    await refresh_configured_admin_message(json_data)
+    return f"Matchmaking channel set to {channel.mention}. Message ready: {message_id}"
+
+
+async def active_matchmaking_queue(guild, json_data):
+    active_queue = []
+    queue = json_data.get("matchmakingQueue", [])
+    for player in queue:
+        member = await get_guild_member(guild, player["userId"])
+        if member and member.voice and member.voice.channel:
+            player["voiceChannelId"] = member.voice.channel.id
+            active_queue.append(player)
+    json_data["matchmakingQueue"] = active_queue
+    return active_queue
+
+
+async def start_matchmaking_queue(guild, json_data):
+    json_data = ensure_matchmaking_state(json_data)
+    queue = await active_matchmaking_queue(guild, json_data)
+
+    if len(queue) < 2:
+        writeToJsonFile(jsonFile, json_data)
+        return False, "At least 2 players are required to start.", json_data
+    if len(queue) > 10:
+        writeToJsonFile(jsonFile, json_data)
+        return False, "The queue cannot contain more than 10 players.", json_data
+
+    json_data["matchmakingInProgress"] = True
+    writeToJsonFile(jsonFile, json_data)
+
+    players = queue[:]
+    random.shuffle(players)
+    team_one = players[::2]
+    team_two = players[1::2]
+    created_channels = []
+
+    if effective_matchmaking_separate_channels(json_data):
+        try:
+            category = None
+            first_voice_id = players[0].get("voiceChannelId")
+            first_voice = guild.get_channel(int(first_voice_id)) if first_voice_id else None
+            if first_voice:
+                category = first_voice.category
+
+            overwrites = {
+                guild.default_role: disnake.PermissionOverwrite(view_channel=True, connect=True)
+            }
+            team_one_channel = await guild.create_voice_channel("Team 1", category=category, overwrites=overwrites)
+            team_two_channel = await guild.create_voice_channel("Team 2", category=category, overwrites=overwrites)
+            created_channels = [team_one_channel.id, team_two_channel.id]
+
+            for player in team_one:
+                member = await get_guild_member(guild, player["userId"])
+                if member and member.voice:
+                    await member.move_to(team_one_channel)
+            for player in team_two:
+                member = await get_guild_member(guild, player["userId"])
+                if member and member.voice:
+                    await member.move_to(team_two_channel)
+        except disnake.Forbidden:
+            json_data["matchmakingInProgress"] = False
+            writeToJsonFile(jsonFile, json_data)
+            for channel_id in created_channels:
+                channel = guild.get_channel(int(channel_id))
+                if channel:
+                    try:
+                        await channel.delete()
+                    except (disnake.Forbidden, disnake.HTTPException):
+                        pass
+            return False, "I do not have permission to create voice channels or move members.", json_data
+        except disnake.HTTPException:
+            json_data["matchmakingInProgress"] = False
+            writeToJsonFile(jsonFile, json_data)
+            for channel_id in created_channels:
+                channel = guild.get_channel(int(channel_id))
+                if channel:
+                    try:
+                        await channel.delete()
+                    except (disnake.Forbidden, disnake.HTTPException):
+                        pass
+            return False, "Discord rejected the channel creation or member move request.", json_data
+
+    json_data["matchmakingQueue"] = []
+    json_data["matchmakingTeamChannelIds"] = created_channels
+    json_data["matchmakingInProgress"] = False
+    writeToJsonFile(jsonFile, json_data)
+
+    team_one_text = ", ".join(f"<@{player['userId']}>" for player in team_one)
+    team_two_text = ", ".join(f"<@{player['userId']}>" for player in team_two)
+    return True, f"Match started.\nTeam 1: {team_one_text}\nTeam 2: {team_two_text}", json_data
 
 
 class MatchmakingView(disnake.ui.View):
@@ -300,7 +616,8 @@ class MatchmakingView(disnake.ui.View):
             response = "You joined the matchmaking queue."
 
         writeToJsonFile(jsonFile, json_data)
-        await refresh_matchmaking_message(inter.channel, json_data)
+        await refresh_configured_matchmaking_message(json_data)
+        await refresh_configured_admin_message(json_data)
         await inter.followup.send(response, ephemeral=True)
 
     @disnake.ui.button(label="Leave", style=disnake.ButtonStyle.red, custom_id="matchmaking:leave")
@@ -312,20 +629,26 @@ class MatchmakingView(disnake.ui.View):
             return
 
         writeToJsonFile(jsonFile, json_data)
-        await refresh_matchmaking_message(inter.channel, json_data)
+        await refresh_configured_matchmaking_message(json_data)
+        await refresh_configured_admin_message(json_data)
         await inter.followup.send("You left the matchmaking queue.", ephemeral=True)
 
     @disnake.ui.button(label="Separate channels", style=disnake.ButtonStyle.blurple, custom_id="matchmaking:separate_channels")
     async def separate_channels(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
         await inter.response.defer(ephemeral=True)
         json_data = ensure_matchmaking_state(load_json_data())
+        if json_data.get("matchmakingSeparateChannelsForced") is not None:
+            await inter.followup.send(f"Separate channels mode is locked by administration: {forced_mode_text(json_data)}.", ephemeral=True)
+            return
+
         if user_queue_index(json_data["matchmakingQueue"], inter.author.id) is None:
             await inter.followup.send("Only queued players can change matchmaking mode.", ephemeral=True)
             return
 
         json_data["matchmakingSeparateChannels"] = not json_data["matchmakingSeparateChannels"]
         writeToJsonFile(jsonFile, json_data)
-        await refresh_matchmaking_message(inter.channel, json_data)
+        await refresh_configured_matchmaking_message(json_data)
+        await refresh_configured_admin_message(json_data)
         mode = "enabled" if json_data["matchmakingSeparateChannels"] else "disabled"
         await inter.followup.send(f"Separate channels {mode}.", ephemeral=True)
 
@@ -333,96 +656,274 @@ class MatchmakingView(disnake.ui.View):
     async def start_match(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
         await inter.response.defer(ephemeral=True)
         json_data = ensure_matchmaking_state(load_json_data())
-        queue = json_data["matchmakingQueue"]
-        active_queue = []
-        for player in queue:
-            member = await get_guild_member(inter.guild, player["userId"])
-            if member and member.voice and member.voice.channel:
-                player["voiceChannelId"] = member.voice.channel.id
-                active_queue.append(player)
-
-        if len(active_queue) != len(queue):
-            json_data["matchmakingQueue"] = active_queue
-            queue = active_queue
-            writeToJsonFile(jsonFile, json_data)
-            await refresh_matchmaking_message(inter.channel, json_data)
-
+        queue = await active_matchmaking_queue(inter.guild, json_data)
         if user_queue_index(queue, inter.author.id) is None:
+            writeToJsonFile(jsonFile, json_data)
+            await refresh_configured_matchmaking_message(json_data)
+            await refresh_configured_admin_message(json_data)
             await inter.followup.send("Only queued players can start matchmaking.", ephemeral=True)
             return
-        if len(queue) < 2:
-            await inter.followup.send("At least 2 players are required to start.", ephemeral=True)
+
+        success, message, json_data = await start_matchmaking_queue(inter.guild, json_data)
+        await refresh_configured_matchmaking_message(json_data)
+        await refresh_configured_admin_message(json_data)
+        await inter.followup.send(message, ephemeral=True)
+
+
+class AddSummonerModal(disnake.ui.Modal):
+    def __init__(self):
+        components = [
+            disnake.ui.TextInput(label="Name", custom_id="name", required=True, max_length=32),
+            disnake.ui.TextInput(label="Tagline", custom_id="tagline", required=True, max_length=16),
+            disnake.ui.TextInput(label="Platform", custom_id="platform", required=True, max_length=8, placeholder="EUW1"),
+            disnake.ui.TextInput(label="Region", custom_id="region", required=True, max_length=12, placeholder="EUROPE"),
+        ]
+        super().__init__(title="Add summoner", custom_id="admin:add_summoner_modal", components=components)
+
+    async def callback(self, inter: disnake.ModalInteraction):
+        if not await require_admin_interaction(inter):
             return
-        if len(queue) > 10:
-            await inter.followup.send("The queue cannot contain more than 10 players.", ephemeral=True)
+
+        name = inter.text_values["name"].strip()
+        tagline = inter.text_values["tagline"].strip()
+        platform = inter.text_values["platform"].strip().upper()
+        region = inter.text_values["region"].strip().upper()
+
+        if platform not in platforms:
+            await send_ephemeral(inter, f"Invalid platform. Use one of: {', '.join(platforms)}")
+            return
+        if region not in regions:
+            await send_ephemeral(inter, f"Invalid region. Use one of: {', '.join(regions)}")
             return
 
-        json_data["matchmakingInProgress"] = True
+        await inter.response.defer(ephemeral=True)
+        success, message = await add_summoner_to_data(name, tagline, platform, region)
+        await refresh_configured_admin_message()
+        await inter.followup.send(message, ephemeral=True)
+
+
+class LeaderboardRemoveSelect(disnake.ui.Select):
+    def __init__(self, summoners):
+        options = [
+            disnake.SelectOption(label=summoner[:100], value=summoner)
+            for summoner in summoners[:MAX_SELECT_OPTIONS]
+        ]
+        super().__init__(
+            placeholder="Remove a leaderboard user",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="admin:leaderboard:remove"
+        )
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        summoner = self.values[0]
+        name, tagline = summoner.split("#", 1)
+        success, message = remove_summoner_from_data(name, tagline)
+        await refresh_configured_admin_message()
+        json_data = load_json_data()
+        await inter.response.edit_message(embed=leaderboard_users_admin_embed(json_data), view=LeaderboardUsersAdminView(json_data))
+        await inter.followup.send(message, ephemeral=True)
+
+
+class QueueRemoveSelect(disnake.ui.Select):
+    def __init__(self, queue):
+        options = []
+        for player in queue[:MAX_SELECT_OPTIONS]:
+            label = player.get("displayName") or str(player.get("userId"))
+            options.append(disnake.SelectOption(label=label[:100], value=str(player["userId"])))
+        super().__init__(
+            placeholder="Kick a queued player",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="admin:matchmaking:kick"
+        )
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        json_data = ensure_matchmaking_state(load_json_data())
+        user_id = self.values[0]
+        removed = remove_user_from_matchmaking_queue(json_data, user_id)
         writeToJsonFile(jsonFile, json_data)
+        await refresh_configured_matchmaking_message(json_data)
+        await refresh_configured_admin_message(json_data)
+        await inter.response.edit_message(embed=matchmaking_admin_embed(json_data), view=MatchmakingAdminView(json_data))
+        response = f"Removed <@{user_id}> from the queue." if removed else "That user is no longer in the queue."
+        await inter.followup.send(response, ephemeral=True)
 
-        players = queue[:]
-        random.shuffle(players)
-        team_one = players[::2]
-        team_two = players[1::2]
-        created_channels = []
 
-        if json_data["matchmakingSeparateChannels"]:
-            try:
-                category = None
-                first_voice_id = players[0].get("voiceChannelId")
-                first_voice = inter.guild.get_channel(int(first_voice_id)) if first_voice_id else None
-                if first_voice:
-                    category = first_voice.category
+class SettingsAdminView(disnake.ui.View):
+    def __init__(self):
+        super().__init__(timeout=300)
 
-                overwrites = {
-                    inter.guild.default_role: disnake.PermissionOverwrite(view_channel=True, connect=True)
-                }
-                team_one_channel = await inter.guild.create_voice_channel("Team 1", category=category, overwrites=overwrites)
-                team_two_channel = await inter.guild.create_voice_channel("Team 2", category=category, overwrites=overwrites)
-                created_channels = [team_one_channel.id, team_two_channel.id]
+    @disnake.ui.channel_select(placeholder="Set leaderboard channel", channel_types=[disnake.ChannelType.text], custom_id="admin:settings:leaderboard", min_values=1, max_values=1)
+    async def leaderboard_channel(self, select: disnake.ui.ChannelSelect, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
 
-                for player in team_one:
-                    member = await get_guild_member(inter.guild, player["userId"])
-                    if member and member.voice:
-                        await member.move_to(team_one_channel)
-                for player in team_two:
-                    member = await get_guild_member(inter.guild, player["userId"])
-                    if member and member.voice:
-                        await member.move_to(team_two_channel)
-            except disnake.Forbidden:
-                json_data["matchmakingInProgress"] = False
-                writeToJsonFile(jsonFile, json_data)
-                for channel_id in created_channels:
-                    channel = inter.guild.get_channel(int(channel_id))
-                    if channel:
-                        try:
-                            await channel.delete()
-                        except (disnake.Forbidden, disnake.HTTPException):
-                            pass
-                await inter.followup.send("I do not have permission to create voice channels or move members.", ephemeral=True)
-                return
-            except disnake.HTTPException:
-                json_data["matchmakingInProgress"] = False
-                writeToJsonFile(jsonFile, json_data)
-                for channel_id in created_channels:
-                    channel = inter.guild.get_channel(int(channel_id))
-                    if channel:
-                        try:
-                            await channel.delete()
-                        except (disnake.Forbidden, disnake.HTTPException):
-                            pass
-                await inter.followup.send("Discord rejected the channel creation or member move request.", ephemeral=True)
-                return
+        channel = select.values[0]
+        bot_member = inter.guild.me or await get_guild_member(inter.guild, bot.user.id)
+        missing_permissions = missing_bot_channel_permissions(channel, bot_member)
+        if missing_permissions:
+            await send_ephemeral(inter, f"I am missing permissions in {channel.mention}: {', '.join(missing_permissions)}.")
+            return
 
-        json_data["matchmakingQueue"] = []
-        json_data["matchmakingTeamChannelIds"] = created_channels
-        json_data["matchmakingInProgress"] = False
+        await inter.response.defer(ephemeral=True)
+        message = await configure_leaderboard_channel(channel)
+        await inter.followup.send(message, ephemeral=True)
+
+    @disnake.ui.channel_select(placeholder="Set matchmaking channel", channel_types=[disnake.ChannelType.text], custom_id="admin:settings:matchmaking", min_values=1, max_values=1)
+    async def matchmaking_channel(self, select: disnake.ui.ChannelSelect, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        channel = select.values[0]
+        bot_member = inter.guild.me or await get_guild_member(inter.guild, bot.user.id)
+        missing_permissions = missing_bot_channel_permissions(channel, bot_member)
+        if missing_permissions:
+            await send_ephemeral(inter, f"I am missing permissions in {channel.mention}: {', '.join(missing_permissions)}.")
+            return
+
+        await inter.response.defer(ephemeral=True)
+        message = await configure_matchmaking_channel(channel)
+        await inter.followup.send(message, ephemeral=True)
+
+
+class LeaderboardUsersAdminView(disnake.ui.View):
+    def __init__(self, json_data):
+        super().__init__(timeout=300)
+        summoners = list((json_data.get("summoners") or {}).keys())
+        if summoners:
+            self.add_item(LeaderboardRemoveSelect(summoners))
+
+    @disnake.ui.button(label="Add summoner", style=disnake.ButtonStyle.green, custom_id="admin:leaderboard:add")
+    async def add_summoner(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+        await inter.response.send_modal(AddSummonerModal())
+
+
+class MatchmakingAdminView(disnake.ui.View):
+    def __init__(self, json_data):
+        super().__init__(timeout=300)
+        queue = json_data.get("matchmakingQueue", [])
+        if queue:
+            self.add_item(QueueRemoveSelect(queue))
+
+    @disnake.ui.button(label="Force start", style=disnake.ButtonStyle.green, custom_id="admin:matchmaking:force_start")
+    async def force_start(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        await inter.response.defer(ephemeral=True)
+        json_data = ensure_matchmaking_state(load_json_data())
+        success, message, json_data = await start_matchmaking_queue(inter.guild, json_data)
+        await refresh_configured_matchmaking_message(json_data)
+        await refresh_configured_admin_message(json_data)
+        await inter.followup.send(message, ephemeral=True)
+
+    @disnake.ui.button(label="Unlocked", style=disnake.ButtonStyle.gray, custom_id="admin:matchmaking:unlock")
+    async def unlock_mode(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        await self.set_forced_mode(inter, None)
+
+    @disnake.ui.button(label="Forced on", style=disnake.ButtonStyle.blurple, custom_id="admin:matchmaking:force_on")
+    async def force_on(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        await self.set_forced_mode(inter, True)
+
+    @disnake.ui.button(label="Forced off", style=disnake.ButtonStyle.red, custom_id="admin:matchmaking:force_off")
+    async def force_off(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        await self.set_forced_mode(inter, False)
+
+    async def set_forced_mode(self, inter, value):
+        if not await require_admin_interaction(inter):
+            return
+
+        json_data = ensure_matchmaking_state(load_json_data())
+        json_data["matchmakingSeparateChannelsForced"] = value
         writeToJsonFile(jsonFile, json_data)
-        await refresh_matchmaking_message(inter.channel, json_data)
+        await refresh_configured_matchmaking_message(json_data)
+        await refresh_configured_admin_message(json_data)
+        await inter.response.edit_message(embed=matchmaking_admin_embed(json_data), view=MatchmakingAdminView(json_data))
 
-        team_one_text = ", ".join(f"<@{player['userId']}>" for player in team_one)
-        team_two_text = ", ".join(f"<@{player['userId']}>" for player in team_two)
-        await inter.followup.send(f"Match started.\nTeam 1: {team_one_text}\nTeam 2: {team_two_text}", ephemeral=True)
+
+class AdminView(disnake.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @disnake.ui.button(label="App settings", style=disnake.ButtonStyle.blurple, custom_id="admin:settings")
+    async def settings(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        json_data = ensure_admin_state(load_json_data())
+        await inter.response.send_message(embed=settings_admin_embed(json_data), view=SettingsAdminView(), ephemeral=True)
+
+    @disnake.ui.button(label="Leaderboard users", style=disnake.ButtonStyle.green, custom_id="admin:leaderboard")
+    async def leaderboard_users(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        json_data = load_json_data()
+        await inter.response.send_message(embed=leaderboard_users_admin_embed(json_data), view=LeaderboardUsersAdminView(json_data), ephemeral=True)
+
+    @disnake.ui.button(label="Matchmaking", style=disnake.ButtonStyle.gray, custom_id="admin:matchmaking")
+    async def matchmaking(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        json_data = ensure_matchmaking_state(load_json_data())
+        await inter.response.send_message(embed=matchmaking_admin_embed(json_data), view=MatchmakingAdminView(json_data), ephemeral=True)
+
+    @disnake.ui.button(label="Refresh", style=disnake.ButtonStyle.gray, custom_id="admin:refresh")
+    async def refresh(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        json_data = ensure_admin_state(load_json_data())
+        await refresh_configured_matchmaking_message(json_data)
+        await refresh_configured_admin_message(json_data)
+        await inter.response.send_message("Administration refreshed.", ephemeral=True)
+
+
+def settings_admin_embed(json_data):
+    embed = disnake.Embed(
+        title="App settings",
+        description="Select the channels used by persistent bot messages.",
+        colour=disnake.Colour.dark_teal()
+    )
+    embed.add_field(name="Leaderboard", value=f"<#{leaderboard_channel_id(json_data)}>", inline=True)
+    embed.add_field(name="Matchmaking", value=f"<#{matchmaking_channel_id(json_data)}>", inline=True)
+    return embed
+
+
+def leaderboard_users_admin_embed(json_data):
+    summoners = json_data.get("summoners") or {}
+    embed = disnake.Embed(
+        title="Leaderboard users",
+        description=f"Configured summoners: **{len(summoners)}**",
+        colour=disnake.Colour.green()
+    )
+    embed.add_field(name="Current users", value=format_summoner_summary(json_data), inline=False)
+    if len(summoners) > MAX_SELECT_OPTIONS:
+        embed.set_footer(text=f"Only the first {MAX_SELECT_OPTIONS} users are available in the remove selector.")
+    return embed
+
+
+def matchmaking_admin_embed(json_data):
+    ensure_matchmaking_state(json_data)
+    embed = disnake.Embed(
+        title="Matchmaking administration",
+        description=f"Queue: **{len(json_data['matchmakingQueue'])}/10**\nSeparate channels: **{'On' if effective_matchmaking_separate_channels(json_data) else 'Off'}**\nAdmin lock: **{forced_mode_text(json_data)}**",
+        colour=disnake.Colour.blurple()
+    )
+    embed.add_field(name="Queued players", value=format_matchmaking_queue(json_data), inline=False)
+    return embed
 
 
 async def refresh_matchmaking_message(channel, json_data=None):
@@ -446,6 +947,47 @@ async def refresh_matchmaking_message(channel, json_data=None):
     writeToJsonFile(jsonFile, json_data)
     print(f"Created matchmaking message {message.id}")
     return message.id
+
+
+async def refresh_admin_message(channel, json_data=None):
+    json_data = ensure_admin_state(json_data or load_json_data())
+    embed = admin_embed(json_data)
+    view = AdminView()
+    message_id = json_data.get("adminMessageId")
+
+    if message_id:
+        try:
+            message = await channel.fetch_message(int(message_id))
+            await message.edit(content=None, embed=embed, view=view)
+            print(f"Updated admin message {message.id}")
+            return message.id
+        except (disnake.NotFound, disnake.Forbidden, disnake.HTTPException, ValueError) as error:
+            print(f"Could not update admin message {message_id}: {error}")
+            pass
+
+    message = await channel.send(embed=embed, view=view)
+    json_data["adminMessageId"] = message.id
+    writeToJsonFile(jsonFile, json_data)
+    print(f"Created admin message {message.id}")
+    return message.id
+
+
+async def setup_admin_message(channel):
+    json_data = ensure_admin_state(load_json_data())
+    old_channel_id = admin_channel_id(json_data)
+    old_message_id = json_data.get("adminMessageId")
+
+    json_data["adminChannelId"] = channel.id
+    if old_channel_id != channel.id:
+        json_data["adminMessageId"] = None
+
+    writeToJsonFile(jsonFile, json_data)
+    message_id = await refresh_admin_message(channel, json_data)
+
+    if old_channel_id != channel.id:
+        await delete_configured_message(old_channel_id, old_message_id)
+
+    return message_id
 
 
 async def setup_matchmaking_message():
@@ -501,8 +1043,14 @@ if __name__ == "__main__":
         print("")
         if not matchmaking_view_registered:
             bot.add_view(MatchmakingView())
+            bot.add_view(AdminView())
             matchmaking_view_registered = True
         await setup_matchmaking_message()
+        json_data = load_json_data()
+        if json_data.get("adminChannelId"):
+            admin_channel = await get_discord_channel(admin_channel_id(json_data))
+            if admin_channel:
+                await refresh_admin_message(admin_channel, json_data)
         if not updateRaceImage.is_running():
             updateRaceImage.start()
             updatePatchNotes.start()
@@ -532,6 +1080,7 @@ if __name__ == "__main__":
             channel = await get_discord_channel(matchmaking_channel_id(json_data))
             if channel:
                 await refresh_matchmaking_message(channel, json_data)
+            await refresh_configured_admin_message(json_data)
 
         await delete_empty_matchmaking_team_channels(member.guild)
 
@@ -670,6 +1219,26 @@ if __name__ == "__main__":
             await inter.send("Could not create the matchmaking message. Check the configured channel and bot permissions.", ephemeral=True)
 
 
+    @bot.slash_command(description="Create or move the administration message")
+    async def setup(inter: ApplicationCommandInteraction, channel: disnake.TextChannel):
+        await inter.response.defer(ephemeral=True)
+        if not inter.guild:
+            await inter.send("This command can only be used inside a server.", ephemeral=True)
+            return
+        if not can_configure_channels(inter):
+            await inter.send("You need Manage Server permission to set up administration.", ephemeral=True)
+            return
+
+        bot_member = inter.guild.me or await get_guild_member(inter.guild, bot.user.id)
+        missing_permissions = missing_bot_channel_permissions(channel, bot_member)
+        if missing_permissions:
+            await inter.send(f"I am missing permissions in {channel.mention}: {', '.join(missing_permissions)}.", ephemeral=True)
+            return
+
+        message_id = await setup_admin_message(channel)
+        await inter.send(f"Administration channel set to {channel.mention}. Message ready: {message_id}", ephemeral=True)
+
+
     @bot.slash_command(description="Set the channel for the editable leaderboard message")
     async def setrankingchannel(inter: ApplicationCommandInteraction, channel: disnake.TextChannel):
         await inter.response.defer(ephemeral=True)
@@ -686,32 +1255,8 @@ if __name__ == "__main__":
             await inter.send(f"I am missing permissions in {channel.mention}: {', '.join(missing_permissions)}.", ephemeral=True)
             return
 
-        json_data = load_json_data()
-        old_channel_id = leaderboard_channel_id(json_data)
-        old_message_id = json_data.get("leaderboardMessageId")
-        old_message = await fetch_configured_message(old_channel_id, old_message_id)
-        old_embed = old_message.embeds[0] if old_message and old_message.embeds else None
-
-        json_data["leaderboardChannelId"] = channel.id
-        if old_message_id and old_message is None:
-            json_data["leaderboardMessageId"] = None
-
-        moved_message = None
-        if old_channel_id != channel.id:
-            json_data["leaderboardMessageId"] = None
-            if old_embed:
-                moved_message = await channel.send(embed=old_embed)
-                json_data["leaderboardMessageId"] = moved_message.id
-            await delete_configured_message(old_channel_id, old_message_id)
-
-        writeToJsonFile(jsonFile, json_data)
-
-        if moved_message:
-            await inter.send(f"Leaderboard channel set to {channel.mention}. Current embed moved.", ephemeral=True)
-        elif json_data.get("leaderboardMessageId"):
-            await inter.send(f"Leaderboard channel set to {channel.mention}.", ephemeral=True)
-        else:
-            await inter.send(f"Leaderboard channel set to {channel.mention}. The message will be created on the next leaderboard update.", ephemeral=True)
+        message = await configure_leaderboard_channel(channel)
+        await inter.send(message, ephemeral=True)
 
 
     @bot.slash_command(description="Set the channel for the matchmaking message")
@@ -730,21 +1275,8 @@ if __name__ == "__main__":
             await inter.send(f"I am missing permissions in {channel.mention}: {', '.join(missing_permissions)}.", ephemeral=True)
             return
 
-        json_data = ensure_matchmaking_state(load_json_data())
-        old_channel_id = matchmaking_channel_id(json_data)
-        old_message_id = json_data.get("matchmakingMessageId")
-
-        json_data["matchmakingChannelId"] = channel.id
-        if old_channel_id != channel.id:
-            json_data["matchmakingMessageId"] = None
-
-        writeToJsonFile(jsonFile, json_data)
-        message_id = await refresh_matchmaking_message(channel, json_data)
-
-        if old_channel_id != channel.id:
-            await delete_configured_message(old_channel_id, old_message_id)
-
-        await inter.send(f"Matchmaking channel set to {channel.mention}. Message ready: {message_id}", ephemeral=True)
+        message = await configure_matchmaking_channel(channel)
+        await inter.send(message, ephemeral=True)
 
 
     @bot.slash_command(description="breakdown of mvp score for a given game")
@@ -783,77 +1315,17 @@ if __name__ == "__main__":
     @bot.slash_command(description="Add summoner to the list")
     async def add(inter: ApplicationCommandInteraction, name: str, tagline: str, platform: str = commands.Param(choices=platforms), region: str = commands.Param(choices=regions)):
         await inter.response.defer()
-        jsonData = openJsonFile(jsonFile)
-        summoners = jsonData.get("summoners")
-
-        if "#" in tagline:
-            tagline = tagline.replace("#", "")
-
-        if summoners is None:
-            jsonData['summoners'] = {}
-
-        summonerFullName = f"{name}#{tagline}"
-        summonerList = [summoner.lower() for summoner in jsonData['summoners']]
-
-        if summonerFullName.lower() in summonerList:
-            await inter.send(f'{summonerFullName} is already added')
-
-        else:
-            response = requests.get(
-                f'https://{region}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{name}/{tagline}?api_key={riotApKey}'
-            )
-            if response.status_code == 200:
-                apiData1 = response.json()
-                summonerFullName = apiData1['gameName'] + '#' + apiData1['tagLine']
-                summonerPuuid = apiData1['puuid']
-
-                response = requests.get(
-                    f'https://{platform}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/{summonerPuuid}?api_key={riotApKey}'
-                )
-                apiData2 = response.json()
-
-                data = jsonData
-
-                data["summoners"][summonerFullName] = {
-                    "id": apiData2['puuid'],
-                    "puuid": summonerPuuid,
-                    "profileIconId": 123,
-                    "platform": platform,
-                    "region": region,
-                    "score": 0,
-                    "dailyScore": 0,
-                    "leaderboardPosition": 100,
-                    "dailyLeaderboardPosition": 100,
-                    "gamesPlayed": 0,
-                    "dailyGamesPlayed": 0
-                }
-
-                writeToJsonFile("data.json", data)
-                await inter.send(f'{summonerFullName} added')
-            else:
-                await inter.send(f'Invalid summoner: {summonerFullName}')
+        success, message = await add_summoner_to_data(name, tagline, platform, region)
+        await refresh_configured_admin_message()
+        await inter.send(message)
 
 
     @bot.slash_command(description="Remove summoner from the list")
     async def remove(inter: ApplicationCommandInteraction, name: str, tagline: str):
         await inter.response.defer()
-        jsonData = openJsonFile(jsonFile)
-        if "#" in tagline:
-            tagline = tagline.replace("#", "")
-
-        summonerFullName = f"{name}#{tagline}"
-        summonerList = [summoner.lower() for summoner in jsonData['summoners']]
-
-        if summonerFullName.lower() not in summonerList:
-            await inter.send(f"{summonerFullName} has not been added")
-        else:
-            # Find the matching summoner in the original case
-            originalCaseSummoner = next(
-                summoner for summoner in jsonData['summoners']
-                if summoner.lower() == summonerFullName.lower())
-            del jsonData['summoners'][originalCaseSummoner]
-            writeToJsonFile("data.json", jsonData)
-            await inter.send(f"{originalCaseSummoner} removed")
+        success, message = remove_summoner_from_data(name, tagline)
+        await refresh_configured_admin_message()
+        await inter.send(message)
 
     print(discordToken)
     bot.run(discordToken)
