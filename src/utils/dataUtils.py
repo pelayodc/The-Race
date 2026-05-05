@@ -242,6 +242,7 @@ def fetchAllSummonerData(force, daily):
     summoners = []
     summonersList = []
     jsonData = openJsonFile(jsonFile)
+    failedSummoners = []
 
     # assign ids, ranks, score
     for summonerName in jsonData["summoners"]:
@@ -287,14 +288,18 @@ def fetchAllSummonerData(force, daily):
                 summoner.dailyScore = jsonData["summoners"][summonerName]['dailyScore']
                 summoner.deltaDailyScore = summoner.score - summoner.dailyScore
                 summoner.dailyGamesPlayed = jsonData["summoners"][summonerName]['dailyGamesPlayed']
-                summoner.deltaGamesPlayed = summoner.gamesPlayed - summoner.dailyGamesPlayed
+                summoner.deltaDailyGamesPlayed = summoner.gamesPlayed - summoner.dailyGamesPlayed
                 summoner.dailyLeaderboardPosition = jsonData["summoners"][summonerName]['dailyLeaderboardPosition']
 
             summoners.append(summoner)
 
-        except Exception:
-            # print(f"{summoner.fullName} is unranked")
-            pass
+        except Exception as error:
+            failedSummoners.append(summoner.fullName)
+            print(f"Failed to fetch rank data for {summoner.fullName}: {error}")
+
+    if failedSummoners:
+        print(f"Skipping leaderboard update because rank data failed for: {', '.join(failedSummoners)}")
+        return [], False
 
     summoners.sort(key=lambda s: (Rank.tierOrder[s.tier], Rank.rankOrder[s.rank], s.leaguePoints, int(s.wins / (s.wins + s.losses) * 100)), reverse=True)
 
