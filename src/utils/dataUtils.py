@@ -12,6 +12,7 @@ from table2ascii import table2ascii as t2a, PresetStyle
 from .commonUtils import jsonFile, statisticsForMvp, Summoner, riotApKey, Rank
 from .drawUtils import generateImage
 from .jsonUtils import openJsonFile, writeToJsonFile
+from .auditUtils import log_event, system_actor
 
 riotBackoffUntil = 0
 HIGH_ELO_CACHE_SECONDS = 600
@@ -25,6 +26,25 @@ def riotBackoffTimestamp():
     return riotBackoffUntil
 
 
+def record_riot_error(context, summary, details=None):
+    details = details or {}
+    jsonData = openJsonFile(jsonFile) or {}
+    jsonData["lastRiotError"] = {
+        "timestamp": datetime.now().isoformat(),
+        "context": context,
+        "summary": summary,
+        "details": details
+    }
+    writeToJsonFile(jsonFile, jsonData)
+    log_event(
+        "riot_api_error",
+        actor=system_actor(),
+        status="error",
+        summary=summary,
+        details={"context": context, **details}
+    )
+
+
 def riot_get(url, context):
     global riotBackoffUntil
 
@@ -35,17 +55,23 @@ def riot_get(url, context):
     if response.status_code == 429:
         retryAfter = int(response.headers.get("Retry-After", 60))
         riotBackoffUntil = time.time() + retryAfter
-        print(f"Riot rate limited {context}. Retrying after {retryAfter} seconds.")
+        summary = f"Riot rate limited {context}. Retrying after {retryAfter} seconds."
+        print(summary)
+        record_riot_error(context, summary, {"statusCode": 429, "retryAfter": retryAfter})
         return False, None, retryAfter
 
     if response.status_code != 200:
-        print(f"Failed Riot request for {context}: status code {response.status_code}, response: {response.text[:200]}")
+        summary = f"Failed Riot request for {context}: status code {response.status_code}"
+        print(f"{summary}, response: {response.text[:200]}")
+        record_riot_error(context, summary, {"statusCode": response.status_code, "responseSnippet": response.text[:200]})
         return False, None, None
 
     try:
         return True, response.json(), None
     except ValueError as error:
-        print(f"Failed to decode Riot response for {context}: {error}")
+        summary = f"Failed to decode Riot response for {context}"
+        print(f"{summary}: {error}")
+        record_riot_error(context, summary, {"error": str(error)})
         return False, None, None
 
 
@@ -304,7 +330,9 @@ def fetchAllSummonerData(force, daily):
 
             if not isinstance(riotApiData, list):
                 failedSummoners.append(summoner.fullName)
-                print(f"Failed to fetch rank data for {summoner.fullName}: unexpected response: {riotApiData}")
+                summary = f"Failed to fetch rank data for {summoner.fullName}: unexpected response"
+                print(f"{summary}: {riotApiData}")
+                record_riot_error(f"rank data for {summoner.fullName}", summary)
                 continue
 
             for data in riotApiData:
@@ -346,14 +374,20 @@ def fetchAllSummonerData(force, daily):
 
         except (KeyError, TypeError, ValueError) as error:
             failedSummoners.append(summoner.fullName)
-            print(f"Failed to fetch rank data for {summoner.fullName}: {error}")
+            summary = f"Failed to fetch rank data for {summoner.fullName}"
+            print(f"{summary}: {error}")
+            log_event("leaderboard_data_error", actor=system_actor(), status="error", summary=summary, details={"summoner": summoner.fullName, "error": str(error)})
 
     if failedSummoners:
-        print(f"Skipping leaderboard update because rank data failed for: {', '.join(failedSummoners)}")
+        summary = f"Skipping leaderboard update because rank data failed for: {', '.join(failedSummoners)}"
+        print(summary)
+        log_event("leaderboard_update_skipped", actor=system_actor(), status="error", summary=summary, details={"failedSummoners": failedSummoners})
         return [], False
 
     if not summoners:
-        print("Skipping leaderboard update because no ranked summoners were available.")
+        summary = "Skipping leaderboard update because no ranked summoners were available."
+        print(summary)
+        log_event("leaderboard_update_skipped", actor=system_actor(), status="error", summary=summary)
         return [], False
 
     summoners.sort(key=lambda s: (Rank.tierOrder[s.tier], Rank.rankOrder[s.rank], s.leaguePoints, int(s.wins / (s.wins + s.losses) * 100)), reverse=True)
@@ -419,7 +453,9 @@ def fetchAllSummonerData(force, daily):
                 combinedHighEloPlayers.extend(data.get("entries", []))
 
             if failedSummoners:
-                print(f"Skipping leaderboard update because high elo data failed for {platform}")
+                summary = f"Skipping leaderboard update because high elo data failed for {platform}"
+                print(summary)
+                log_event("leaderboard_update_skipped", actor=system_actor(), status="error", summary=summary, details={"platform": platform})
                 return [], False
 
             highEloPlayersData[platform] = sorted(combinedHighEloPlayers, key=lambda x: (-x["leaguePoints"], -x["wins"]))
@@ -445,7 +481,9 @@ def fetchAllSummonerData(force, daily):
                     f"match ids for {summoner.fullName}"
                 )
                 if not ok or not isinstance(riotApiData, list):
-                    print(f"Skipping leaderboard update because match ids failed for {summoner.fullName}")
+                    summary = f"Skipping leaderboard update because match ids failed for {summoner.fullName}"
+                    print(summary)
+                    log_event("leaderboard_update_skipped", actor=system_actor(), status="error", summary=summary, details={"summoner": summoner.fullName})
                     return [], False
                 jsonData["summoners"][summoner.fullName]["recentMatchIds"] = riotApiData[:5]
             else:
@@ -463,7 +501,9 @@ def fetchAllSummonerData(force, daily):
                         f"match data {matchId}"
                     )
                     if not ok:
-                        print(f"Skipping leaderboard update because match data failed for {matchId}")
+                        summary = f"Skipping leaderboard update because match data failed for {matchId}"
+                        print(summary)
+                        log_event("leaderboard_update_skipped", actor=system_actor(), status="error", summary=summary, details={"matchId": matchId})
                         return [], False
 
                     jsonData["matchData"][matchId] = matchData

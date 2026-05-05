@@ -1,6 +1,7 @@
 import math
+import os
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import disnake
 import pytz
 from disnake import ApplicationCommandInteraction
@@ -9,6 +10,7 @@ import requests
 from utils.commonUtils import requestLimit, jsonFile, dailyPostTimer, discordChannel, platforms, regions, riotApKey, discordToken
 from utils.dataUtils import checkForNewPatchNotes, numberOfSummoners, update, crownData, mvpData, riotBackoffRemaining, riotBackoffTimestamp
 from utils.jsonUtils import openJsonFile, writeToJsonFile
+from utils.auditUtils import AUDIT_LOG_PATH, interaction_actor, log_event, read_audit_events, recent_error_events, system_actor
 
 bot = commands.InteractionBot()
 matchmaking_view_registered = False
@@ -150,6 +152,10 @@ def load_json_data():
     return openJsonFile(jsonFile) or {}
 
 
+def utc_now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
 def configured_channel_id(json_data, key):
     try:
         return int(json_data.get(key) or discordChannel)
@@ -244,6 +250,11 @@ def ensure_matchmaking_state(json_data):
 def ensure_admin_state(json_data):
     ensure_matchmaking_state(json_data)
     json_data.setdefault("adminMessageId", None)
+    json_data.setdefault("leaderboardLastUpdateAt", None)
+    json_data.setdefault("leaderboardLastUpdateMode", None)
+    json_data.setdefault("leaderboardLastUpdateStatus", None)
+    json_data.setdefault("leaderboardLastEstimatedApiCalls", 0)
+    json_data.setdefault("lastRiotError", None)
     return json_data
 
 
@@ -318,6 +329,42 @@ def format_matchmaking_queue(json_data):
     return "\n".join(players)
 
 
+def estimate_leaderboard_api_calls(json_data):
+    summoners = json_data.get("summoners") or {}
+    estimated_calls = len(summoners)
+    now = datetime.now().timestamp()
+    high_elo_cache = json_data.get("highEloCache") or {}
+    for cache in high_elo_cache.values():
+        if now - cache.get("timestamp", 0) >= 600:
+            estimated_calls += 3
+    return estimated_calls
+
+
+def set_leaderboard_runtime_status(json_data, mode, status, estimated_calls, last_error=None):
+    latest_json_data = load_json_data()
+    latest_json_data["leaderboardLastUpdateAt"] = utc_now_iso()
+    latest_json_data["leaderboardLastUpdateMode"] = mode
+    latest_json_data["leaderboardLastUpdateStatus"] = status
+    latest_json_data["leaderboardLastEstimatedApiCalls"] = estimated_calls
+    if last_error:
+        latest_json_data["lastRiotError"] = {
+            "timestamp": utc_now_iso(),
+            "context": "leaderboard",
+            "summary": last_error
+        }
+    writeToJsonFile(jsonFile, latest_json_data)
+    return latest_json_data
+
+
+def format_log_event(event):
+    timestamp = event.get("timestamp", "-")
+    timestamp = timestamp.replace("T", " ")[:19]
+    actor = event.get("actorName") or event.get("actorId") or "system"
+    status = event.get("status", "info")
+    summary = event.get("summary", "")
+    return f"`{timestamp}` **{event.get('event', 'event')}** [{status}] {actor}: {summary}"[:1000]
+
+
 def matchmaking_embed(json_data):
     ensure_matchmaking_state(json_data)
     queue = json_data["matchmakingQueue"]
@@ -371,7 +418,60 @@ def admin_embed(json_data):
     embed.add_field(name="Leaderboard users", value=str(len(summoners)), inline=True)
     embed.add_field(name="Matchmaking queue", value=f"{len(queue)}/10", inline=True)
     embed.add_field(name="Separate channels", value=f"{'On' if effective_matchmaking_separate_channels(json_data) else 'Off'} ({forced_mode_text(json_data)})", inline=True)
+    embed.add_field(name="Leaderboard status", value=json_data.get("leaderboardLastUpdateStatus") or "Unknown", inline=True)
     embed.set_footer(text="Administration actions require Manage Server.")
+    return embed
+
+
+def status_admin_embed(json_data):
+    ensure_admin_state(json_data)
+    backoff_remaining = int(riotBackoffRemaining())
+    if backoff_remaining > 0:
+        backoff_until = datetime.fromtimestamp(riotBackoffTimestamp()).strftime("%H:%M:%S")
+        backoff_text = f"Active until {backoff_until} ({backoff_remaining}s remaining)"
+    else:
+        backoff_text = "Inactive"
+
+    last_update = json_data.get("leaderboardLastUpdateAt") or "Never"
+    update_mode = json_data.get("leaderboardLastUpdateMode") or "-"
+    update_status = json_data.get("leaderboardLastUpdateStatus") or "-"
+    estimated_calls = estimate_leaderboard_api_calls(json_data)
+    stored_estimate = json_data.get("leaderboardLastEstimatedApiCalls", 0)
+    last_error = json_data.get("lastRiotError") or {}
+    error_summary = last_error.get("summary", "No Riot errors recorded.")
+
+    embed = disnake.Embed(
+        title="Status / Logs",
+        description="Operational status for leaderboard updates and Riot API usage.",
+        colour=disnake.Colour.dark_teal(),
+        timestamp=datetime.now()
+    )
+    embed.add_field(name="Riot backoff", value=backoff_text, inline=False)
+    embed.add_field(name="Last leaderboard update", value=f"{last_update}\nMode: **{update_mode}**\nStatus: **{update_status}**", inline=False)
+    embed.add_field(name="Estimated API calls", value=f"Next normal cycle: **{estimated_calls}**\nLast stored estimate: **{stored_estimate}**\nMatch history/details only refresh on new games, daily, or force.", inline=False)
+    embed.add_field(name="Last Riot error", value=error_summary[:1024], inline=False)
+
+    errors = recent_error_events(5)
+    if errors:
+        embed.add_field(name="Recent errors", value="\n".join(format_log_event(event) for event in errors)[-1024:], inline=False)
+    else:
+        embed.add_field(name="Recent errors", value="No recent errors.", inline=False)
+    return embed
+
+
+def recent_logs_embed(limit=10):
+    events = read_audit_events(limit=limit)
+    embed = disnake.Embed(
+        title="Recent audit logs",
+        colour=disnake.Colour.dark_teal(),
+        timestamp=datetime.now()
+    )
+    if not events:
+        embed.description = "No audit logs stored yet."
+        return embed
+
+    value = "\n".join(format_log_event(event) for event in events)
+    embed.description = value[-4000:]
     return embed
 
 
@@ -448,7 +548,7 @@ def remove_summoner_from_data(name, tagline):
     return True, f"{summoner_key} removed"
 
 
-async def configure_leaderboard_channel(channel):
+async def configure_leaderboard_channel(channel, actor=None):
     json_data = load_json_data()
     old_channel_id = leaderboard_channel_id(json_data)
     old_message_id = json_data.get("leaderboardMessageId")
@@ -471,13 +571,17 @@ async def configure_leaderboard_channel(channel):
     await refresh_configured_admin_message(json_data)
 
     if moved_message:
-        return f"Leaderboard channel set to {channel.mention}. Current embed moved."
-    if json_data.get("leaderboardMessageId"):
-        return f"Leaderboard channel set to {channel.mention}."
-    return f"Leaderboard channel set to {channel.mention}. The message will be created on the next leaderboard update."
+        message = f"Leaderboard channel set to {channel.mention}. Current embed moved."
+    elif json_data.get("leaderboardMessageId"):
+        message = f"Leaderboard channel set to {channel.mention}."
+    else:
+        message = f"Leaderboard channel set to {channel.mention}. The message will be created on the next leaderboard update."
+
+    log_event("leaderboard_channel_changed", actor=actor, status="success", summary=message, details={"channelId": str(channel.id)})
+    return message
 
 
-async def configure_matchmaking_channel(channel):
+async def configure_matchmaking_channel(channel, actor=None):
     json_data = ensure_matchmaking_state(load_json_data())
     old_channel_id = matchmaking_channel_id(json_data)
     old_message_id = json_data.get("matchmakingMessageId")
@@ -493,7 +597,9 @@ async def configure_matchmaking_channel(channel):
         await delete_configured_message(old_channel_id, old_message_id)
 
     await refresh_configured_admin_message(json_data)
-    return f"Matchmaking channel set to {channel.mention}. Message ready: {message_id}"
+    message = f"Matchmaking channel set to {channel.mention}. Message ready: {message_id}"
+    log_event("matchmaking_channel_changed", actor=actor, status="success", summary=message, details={"channelId": str(channel.id), "messageId": str(message_id)})
+    return message
 
 
 async def active_matchmaking_queue(guild, json_data):
@@ -618,6 +724,7 @@ class MatchmakingView(disnake.ui.View):
         writeToJsonFile(jsonFile, json_data)
         await refresh_configured_matchmaking_message(json_data)
         await refresh_configured_admin_message(json_data)
+        log_event("matchmaking_join", actor=interaction_actor(inter), status="success", summary=response)
         await inter.followup.send(response, ephemeral=True)
 
     @disnake.ui.button(label="Leave", style=disnake.ButtonStyle.red, custom_id="matchmaking:leave")
@@ -631,6 +738,7 @@ class MatchmakingView(disnake.ui.View):
         writeToJsonFile(jsonFile, json_data)
         await refresh_configured_matchmaking_message(json_data)
         await refresh_configured_admin_message(json_data)
+        log_event("matchmaking_leave", actor=interaction_actor(inter), status="success", summary="User left matchmaking queue.")
         await inter.followup.send("You left the matchmaking queue.", ephemeral=True)
 
     @disnake.ui.button(label="Separate channels", style=disnake.ButtonStyle.blurple, custom_id="matchmaking:separate_channels")
@@ -650,6 +758,7 @@ class MatchmakingView(disnake.ui.View):
         await refresh_configured_matchmaking_message(json_data)
         await refresh_configured_admin_message(json_data)
         mode = "enabled" if json_data["matchmakingSeparateChannels"] else "disabled"
+        log_event("matchmaking_separate_channels_toggle", actor=interaction_actor(inter), status="success", summary=f"Separate channels {mode}.")
         await inter.followup.send(f"Separate channels {mode}.", ephemeral=True)
 
     @disnake.ui.button(label="Start match", style=disnake.ButtonStyle.gray, custom_id="matchmaking:start")
@@ -667,6 +776,7 @@ class MatchmakingView(disnake.ui.View):
         success, message, json_data = await start_matchmaking_queue(inter.guild, json_data)
         await refresh_configured_matchmaking_message(json_data)
         await refresh_configured_admin_message(json_data)
+        log_event("matchmaking_start", actor=interaction_actor(inter), status="success" if success else "error", summary=message)
         await inter.followup.send(message, ephemeral=True)
 
 
@@ -698,6 +808,7 @@ class AddSummonerModal(disnake.ui.Modal):
 
         await inter.response.defer(ephemeral=True)
         success, message = await add_summoner_to_data(name, tagline, platform, region)
+        log_event("leaderboard_summoner_add", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"name": name, "tagline": tagline, "platform": platform, "region": region})
         await refresh_configured_admin_message()
         await inter.followup.send(message, ephemeral=True)
 
@@ -723,6 +834,7 @@ class LeaderboardRemoveSelect(disnake.ui.Select):
         summoner = self.values[0]
         name, tagline = summoner.split("#", 1)
         success, message = remove_summoner_from_data(name, tagline)
+        log_event("leaderboard_summoner_remove", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"summoner": summoner})
         await refresh_configured_admin_message()
         json_data = load_json_data()
         await inter.response.edit_message(embed=leaderboard_users_admin_embed(json_data), view=LeaderboardUsersAdminView(json_data))
@@ -751,10 +863,11 @@ class QueueRemoveSelect(disnake.ui.Select):
         user_id = self.values[0]
         removed = remove_user_from_matchmaking_queue(json_data, user_id)
         writeToJsonFile(jsonFile, json_data)
+        response = f"Removed <@{user_id}> from the queue." if removed else "That user is no longer in the queue."
+        log_event("matchmaking_queue_kick", actor=interaction_actor(inter), status="success" if removed else "error", summary=response, details={"userId": str(user_id)})
         await refresh_configured_matchmaking_message(json_data)
         await refresh_configured_admin_message(json_data)
         await inter.response.edit_message(embed=matchmaking_admin_embed(json_data), view=MatchmakingAdminView(json_data))
-        response = f"Removed <@{user_id}> from the queue." if removed else "That user is no longer in the queue."
         await inter.followup.send(response, ephemeral=True)
 
 
@@ -775,7 +888,7 @@ class SettingsAdminView(disnake.ui.View):
             return
 
         await inter.response.defer(ephemeral=True)
-        message = await configure_leaderboard_channel(channel)
+        message = await configure_leaderboard_channel(channel, interaction_actor(inter))
         await inter.followup.send(message, ephemeral=True)
 
     @disnake.ui.channel_select(placeholder="Set matchmaking channel", channel_types=[disnake.ChannelType.text], custom_id="admin:settings:matchmaking", min_values=1, max_values=1)
@@ -791,7 +904,7 @@ class SettingsAdminView(disnake.ui.View):
             return
 
         await inter.response.defer(ephemeral=True)
-        message = await configure_matchmaking_channel(channel)
+        message = await configure_matchmaking_channel(channel, interaction_actor(inter))
         await inter.followup.send(message, ephemeral=True)
 
 
@@ -824,6 +937,7 @@ class MatchmakingAdminView(disnake.ui.View):
         await inter.response.defer(ephemeral=True)
         json_data = ensure_matchmaking_state(load_json_data())
         success, message, json_data = await start_matchmaking_queue(inter.guild, json_data)
+        log_event("matchmaking_force_start", actor=interaction_actor(inter), status="success" if success else "error", summary=message)
         await refresh_configured_matchmaking_message(json_data)
         await refresh_configured_admin_message(json_data)
         await inter.followup.send(message, ephemeral=True)
@@ -847,9 +961,41 @@ class MatchmakingAdminView(disnake.ui.View):
         json_data = ensure_matchmaking_state(load_json_data())
         json_data["matchmakingSeparateChannelsForced"] = value
         writeToJsonFile(jsonFile, json_data)
+        log_event("matchmaking_separate_channels_forced", actor=interaction_actor(inter), status="success", summary=f"Separate channels lock set to {forced_mode_text(json_data)}", details={"forced": value})
         await refresh_configured_matchmaking_message(json_data)
         await refresh_configured_admin_message(json_data)
         await inter.response.edit_message(embed=matchmaking_admin_embed(json_data), view=MatchmakingAdminView(json_data))
+
+
+class StatusLogsAdminView(disnake.ui.View):
+    def __init__(self):
+        super().__init__(timeout=300)
+
+    @disnake.ui.button(label="Refresh status", style=disnake.ButtonStyle.blurple, custom_id="admin:status:refresh")
+    async def refresh_status(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        json_data = ensure_admin_state(load_json_data())
+        await inter.response.edit_message(embed=status_admin_embed(json_data), view=StatusLogsAdminView())
+
+    @disnake.ui.button(label="View recent logs", style=disnake.ButtonStyle.gray, custom_id="admin:status:recent_logs")
+    async def view_recent_logs(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        await inter.response.send_message(embed=recent_logs_embed(), ephemeral=True)
+
+    @disnake.ui.button(label="Download logs", style=disnake.ButtonStyle.gray, custom_id="admin:status:download_logs")
+    async def download_logs(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        if not os.path.exists(AUDIT_LOG_PATH):
+            await inter.response.send_message("No audit log file exists yet.", ephemeral=True)
+            return
+
+        await inter.response.send_message("Audit log file:", file=disnake.File(AUDIT_LOG_PATH), ephemeral=True)
 
 
 class AdminView(disnake.ui.View):
@@ -879,6 +1025,14 @@ class AdminView(disnake.ui.View):
 
         json_data = ensure_matchmaking_state(load_json_data())
         await inter.response.send_message(embed=matchmaking_admin_embed(json_data), view=MatchmakingAdminView(json_data), ephemeral=True)
+
+    @disnake.ui.button(label="Status / Logs", style=disnake.ButtonStyle.blurple, custom_id="admin:status")
+    async def status_logs(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        json_data = ensure_admin_state(load_json_data())
+        await inter.response.send_message(embed=status_admin_embed(json_data), view=StatusLogsAdminView(), ephemeral=True)
 
     @disnake.ui.button(label="Refresh", style=disnake.ButtonStyle.gray, custom_id="admin:refresh")
     async def refresh(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -1110,6 +1264,8 @@ if __name__ == "__main__":
 
     @tasks.loop(seconds=60)
     async def updateRaceImage():
+        json_data = ensure_admin_state(openJsonFile(jsonFile) or {})
+        estimated_calls = estimate_leaderboard_api_calls(json_data)
         safeRequestLimit = requestLimit if requestLimit and requestLimit > 0 else 100
         calculatedInterval = math.floor(60 * numberOfSummoners(5) / (safeRequestLimit * 0.7))
         interval = max(calculatedInterval, 120)
@@ -1118,10 +1274,13 @@ if __name__ == "__main__":
 
         if riotBackoffRemaining() > 0:
             retryTime = datetime.fromtimestamp(riotBackoffTimestamp()).strftime("%H:%M:%S")
-            print(f"Skipping Riot update until {retryTime} due to rate limit")
+            summary = f"Skipping Riot update until {retryTime} due to rate limit"
+            print(summary)
+            json_data = set_leaderboard_runtime_status(json_data, "normal", "rate_limited", estimated_calls, summary)
+            log_event("leaderboard_update_skipped", actor=system_actor(), status="error", summary=summary, details={"retryTime": retryTime})
+            await refresh_configured_admin_message(json_data)
             return
 
-        json_data = openJsonFile(jsonFile)
         lastRunTime = json_data['runtime']
         # Set the timezone to Europe/London
         timezone = pytz.timezone('Europe/Madrid')
@@ -1136,23 +1295,33 @@ if __name__ == "__main__":
             writeToJsonFile("data.json", json_data)
             force_leaderboard = not json_data.get("leaderboardMessageId")
             summoners, updated = update(force_leaderboard, True, returnData=True, generate=False)
+            status = "updated" if summoners and (updated or force_leaderboard) else "no_changes" if summoners else "skipped"
+            json_data = set_leaderboard_runtime_status(json_data, "daily", status, estimated_calls, None if summoners else "Daily leaderboard update returned no summoners.")
+            log_event("leaderboard_update", actor=system_actor(), status="success" if summoners else "error", summary=f"Daily leaderboard update {status}.", details={"updated": bool(updated), "force": bool(force_leaderboard), "summoners": len(summoners or [])})
             if summoners and (updated or force_leaderboard):
                 channel = await get_discord_channel(leaderboard_channel_id(json_data))
                 if not channel:
+                    log_event("leaderboard_update", actor=system_actor(), status="error", summary="Leaderboard channel was not found.", details={"channelId": str(leaderboard_channel_id(json_data))})
                     return
                 latest_json_data = openJsonFile(jsonFile)
                 latest_json_data['leaderboardMessageId'] = await send_or_edit_leaderboard(channel, latest_json_data, summoners, True, dateStr)
                 writeToJsonFile("data.json", latest_json_data)
+            await refresh_configured_admin_message()
         else:
             force_leaderboard = not json_data.get("leaderboardMessageId")
             summoners, updated = update(force_leaderboard, False, returnData=True, generate=False)
+            status = "updated" if summoners and (updated or force_leaderboard) else "no_changes" if summoners else "skipped"
+            json_data = set_leaderboard_runtime_status(json_data, "normal", status, estimated_calls, None if summoners else "Leaderboard update returned no summoners.")
+            log_event("leaderboard_update", actor=system_actor(), status="success" if summoners else "error", summary=f"Normal leaderboard update {status}.", details={"updated": bool(updated), "force": bool(force_leaderboard), "summoners": len(summoners or [])})
             if summoners and (updated or force_leaderboard):
                 channel = await get_discord_channel(leaderboard_channel_id(json_data))
                 if not channel:
+                    log_event("leaderboard_update", actor=system_actor(), status="error", summary="Leaderboard channel was not found.", details={"channelId": str(leaderboard_channel_id(json_data))})
                     return
                 latest_json_data = openJsonFile(jsonFile)
                 latest_json_data['leaderboardMessageId'] = await send_or_edit_leaderboard(channel, latest_json_data, summoners)
                 writeToJsonFile("data.json", latest_json_data)
+            await refresh_configured_admin_message()
 
 
     @bot.slash_command(description="Full list of summoners")
@@ -1236,6 +1405,7 @@ if __name__ == "__main__":
             return
 
         message_id = await setup_admin_message(channel)
+        log_event("admin_setup", actor=interaction_actor(inter), status="success", summary=f"Administration channel set to {channel.mention}.", details={"channelId": str(channel.id), "messageId": str(message_id)})
         await inter.send(f"Administration channel set to {channel.mention}. Message ready: {message_id}", ephemeral=True)
 
 
@@ -1255,7 +1425,7 @@ if __name__ == "__main__":
             await inter.send(f"I am missing permissions in {channel.mention}: {', '.join(missing_permissions)}.", ephemeral=True)
             return
 
-        message = await configure_leaderboard_channel(channel)
+        message = await configure_leaderboard_channel(channel, interaction_actor(inter))
         await inter.send(message, ephemeral=True)
 
 
@@ -1275,7 +1445,7 @@ if __name__ == "__main__":
             await inter.send(f"I am missing permissions in {channel.mention}: {', '.join(missing_permissions)}.", ephemeral=True)
             return
 
-        message = await configure_matchmaking_channel(channel)
+        message = await configure_matchmaking_channel(channel, interaction_actor(inter))
         await inter.send(message, ephemeral=True)
 
 
@@ -1316,6 +1486,7 @@ if __name__ == "__main__":
     async def add(inter: ApplicationCommandInteraction, name: str, tagline: str, platform: str = commands.Param(choices=platforms), region: str = commands.Param(choices=regions)):
         await inter.response.defer()
         success, message = await add_summoner_to_data(name, tagline, platform, region)
+        log_event("leaderboard_summoner_add", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"name": name, "tagline": tagline, "platform": platform, "region": region})
         await refresh_configured_admin_message()
         await inter.send(message)
 
@@ -1324,6 +1495,7 @@ if __name__ == "__main__":
     async def remove(inter: ApplicationCommandInteraction, name: str, tagline: str):
         await inter.response.defer()
         success, message = remove_summoner_from_data(name, tagline)
+        log_event("leaderboard_summoner_remove", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"name": name, "tagline": tagline})
         await refresh_configured_admin_message()
         await inter.send(message)
 
