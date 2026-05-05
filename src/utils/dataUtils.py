@@ -13,6 +13,41 @@ from .commonUtils import jsonFile, statisticsForMvp, Summoner, riotApKey, Rank
 from .drawUtils import generateImage
 from .jsonUtils import openJsonFile, writeToJsonFile
 
+riotBackoffUntil = 0
+HIGH_ELO_CACHE_SECONDS = 600
+
+
+def riotBackoffRemaining():
+    return max(0, riotBackoffUntil - time.time())
+
+
+def riotBackoffTimestamp():
+    return riotBackoffUntil
+
+
+def riot_get(url, context):
+    global riotBackoffUntil
+
+    if riotBackoffRemaining() > 0:
+        return False, None, riotBackoffRemaining()
+
+    response = requests.get(url)
+    if response.status_code == 429:
+        retryAfter = int(response.headers.get("Retry-After", 60))
+        riotBackoffUntil = time.time() + retryAfter
+        print(f"Riot rate limited {context}. Retrying after {retryAfter} seconds.")
+        return False, None, retryAfter
+
+    if response.status_code != 200:
+        print(f"Failed Riot request for {context}: status code {response.status_code}, response: {response.text[:200]}")
+        return False, None, None
+
+    try:
+        return True, response.json(), None
+    except ValueError as error:
+        print(f"Failed to decode Riot response for {context}: {error}")
+        return False, None, None
+
 
 def calculateZScore(value, multiplier, mean, std):
     if mean is None or std is None or std == 0:
@@ -242,6 +277,7 @@ def fetchAllSummonerData(force, daily):
     summoners = []
     summonersList = []
     jsonData = openJsonFile(jsonFile)
+    jsonData.setdefault("highEloCache", {})
     failedSummoners = []
 
     # assign ids, ranks, score
@@ -258,13 +294,14 @@ def fetchAllSummonerData(force, daily):
         summoner.region = jsonData["summoners"][summonerName]["region"]
         # print(f'Fetching {summoner.fullName} rank data')
         try:
-            response = requests.get(f'https://{summoner.platform}.api.riotgames.com/lol/league/v4/entries/by-puuid/{summoner.puuid}?api_key={riotApKey}')
-            if response.status_code != 200:
+            ok, riotApiData, retryAfter = riot_get(
+                f'https://{summoner.platform}.api.riotgames.com/lol/league/v4/entries/by-puuid/{summoner.puuid}?api_key={riotApKey}',
+                f"rank data for {summoner.fullName}"
+            )
+            if not ok:
                 failedSummoners.append(summoner.fullName)
-                print(f"Failed to fetch rank data for {summoner.fullName}: status code {response.status_code}, response: {response.text[:200]}")
                 continue
 
-            riotApiData = response.json()
             if not isinstance(riotApiData, list):
                 failedSummoners.append(summoner.fullName)
                 print(f"Failed to fetch rank data for {summoner.fullName}: unexpected response: {riotApiData}")
@@ -315,6 +352,10 @@ def fetchAllSummonerData(force, daily):
         print(f"Skipping leaderboard update because rank data failed for: {', '.join(failedSummoners)}")
         return [], False
 
+    if not summoners:
+        print("Skipping leaderboard update because no ranked summoners were available.")
+        return [], False
+
     summoners.sort(key=lambda s: (Rank.tierOrder[s.tier], Rank.rankOrder[s.rank], s.leaguePoints, int(s.wins / (s.wins + s.losses) * 100)), reverse=True)
 
     for i, summoner in enumerate(summoners):
@@ -342,6 +383,12 @@ def fetchAllSummonerData(force, daily):
         allMatchesIds = []
         highEloPlayersPlatforms = []
         highEloPlayersData = {}
+        summonersToRefreshMatches = []
+        for summoner in summoners:
+            savedMatchIds = jsonData["summoners"][summoner.fullName].get("recentMatchIds", [])
+            shouldRefreshMatches = force or daily or summoner.deltaGamesPlayed != 0 or len(savedMatchIds) < 5
+            if shouldRefreshMatches:
+                summonersToRefreshMatches.append(summoner)
 
         # Collect unique platforms of summoners in high elo
         for summoner in summoners:
@@ -352,22 +399,34 @@ def fetchAllSummonerData(force, daily):
 
         # Fetch high elo player data for each unique platform
         for platform in highEloPlayersPlatforms:
-            mastersUrl = f"https://{platform.lower()}.api.riotgames.com/lol/league/v4/masterleagues/by-queue/RANKED_SOLO_5x5?api_key=RGAPI-f42c18f5-4234-48aa-b354-c977e092238d"
-            grandMastersUrl = f"https://{platform.lower()}.api.riotgames.com/lol/league/v4/grandmasterleagues/by-queue/RANKED_SOLO_5x5?api_key=RGAPI-f42c18f5-4234-48aa-b354-c977e092238d"
-            challengerUrl = f"https://{platform.lower()}.api.riotgames.com/lol/league/v4/challengerleagues/by-queue/RANKED_SOLO_5x5?api_key=RGAPI-f42c18f5-4234-48aa-b354-c977e092238d"
+            cache = jsonData["highEloCache"].get(platform, {})
+            if time.time() - cache.get("timestamp", 0) < HIGH_ELO_CACHE_SECONDS:
+                highEloPlayersData[platform] = cache.get("players", [])
+                continue
+
+            urls = [
+                f"https://{platform.lower()}.api.riotgames.com/lol/league/v4/masterleagues/by-queue/RANKED_SOLO_5x5?api_key={riotApKey}",
+                f"https://{platform.lower()}.api.riotgames.com/lol/league/v4/grandmasterleagues/by-queue/RANKED_SOLO_5x5?api_key={riotApKey}",
+                f"https://{platform.lower()}.api.riotgames.com/lol/league/v4/challengerleagues/by-queue/RANKED_SOLO_5x5?api_key={riotApKey}",
+            ]
 
             combinedHighEloPlayers = []
-            for url in [mastersUrl, grandMastersUrl, challengerUrl]:
-                response = requests.get(url)
-                if response.status_code == 200:
-                    players = response.json().get("entries", [])
-                    combinedHighEloPlayers.extend(players)
-                else:
-                    print(f"Failed to fetch data from {url}. Status code:", response.status_code)
+            for url in urls:
+                ok, data, retryAfter = riot_get(url, f"high elo data for {platform}")
+                if not ok:
+                    failedSummoners.append(f"high elo cache {platform}")
+                    break
+                combinedHighEloPlayers.extend(data.get("entries", []))
 
-            sortedHighEloPlayers = sorted(combinedHighEloPlayers, key=lambda x: (-x["leaguePoints"], -x["wins"]))
+            if failedSummoners:
+                print(f"Skipping leaderboard update because high elo data failed for {platform}")
+                return [], False
 
-            highEloPlayersData[platform] = sortedHighEloPlayers
+            highEloPlayersData[platform] = sorted(combinedHighEloPlayers, key=lambda x: (-x["leaguePoints"], -x["wins"]))
+            jsonData["highEloCache"][platform] = {
+                "timestamp": time.time(),
+                "players": highEloPlayersData[platform]
+            }
 
         # Assign ranks to summoners based on fetched data for their respective platforms
         for summoner in summoners:
@@ -380,7 +439,18 @@ def fetchAllSummonerData(force, daily):
 
         for summoner in summoners:
             # solo 420 flex 440
-            riotApiData = requests.get(f'https://{summoner.region}.api.riotgames.com/lol/match/v5/matches/by-puuid/{summoner.puuid}/ids?queue=420&start=0&count=5&api_key={riotApKey}').json()
+            if summoner in summonersToRefreshMatches:
+                ok, riotApiData, retryAfter = riot_get(
+                    f'https://{summoner.region}.api.riotgames.com/lol/match/v5/matches/by-puuid/{summoner.puuid}/ids?queue=420&start=0&count=5&api_key={riotApKey}',
+                    f"match ids for {summoner.fullName}"
+                )
+                if not ok or not isinstance(riotApiData, list):
+                    print(f"Skipping leaderboard update because match ids failed for {summoner.fullName}")
+                    return [], False
+                jsonData["summoners"][summoner.fullName]["recentMatchIds"] = riotApiData[:5]
+            else:
+                riotApiData = jsonData["summoners"][summoner.fullName].get("recentMatchIds", [])
+
             for i, matchId in enumerate(riotApiData):
                 allMatchesIds.append(matchId)
                 if matchId in jsonData["matchData"]:
@@ -388,26 +458,32 @@ def fetchAllSummonerData(force, daily):
                     fetchMatchData(i, summoner, jsonData, matchId)
                 else:
                     # print(f'Fetching {matchId}')
-                    success = False
-                    matchData = None
-                    while not success:
-                        response = requests.get(f'https://{summoner.region}.api.riotgames.com/lol/match/v5/matches/{matchId}?api_key={riotApKey}')
-                        if response.status_code == 200:
-                            matchData = response.json()
-                            success = True
-                        else:
-                            print("No match data, trying again in 125 seconds")
-                            time.sleep(125)
+                    ok, matchData, retryAfter = riot_get(
+                        f'https://{summoner.region}.api.riotgames.com/lol/match/v5/matches/{matchId}?api_key={riotApKey}',
+                        f"match data {matchId}"
+                    )
+                    if not ok:
+                        print(f"Skipping leaderboard update because match data failed for {matchId}")
+                        return [], False
 
                     jsonData["matchData"][matchId] = matchData
 
                     fetchMatchData(i, summoner, jsonData, matchId)
 
+        for summoner in summoners:
             summonersList.append(summoner)
 
         # give crown to the best recent 5 games
         for summoner in summoners:
-            summoner.MvpScoreTotal = summoner.game1MvpScore + summoner.game2MvpScore + summoner.game3MvpScore + summoner.game4MvpScore + summoner.game5MvpScore
+            summoner.MvpScoreTotal = sum(
+                score or 0 for score in [
+                    summoner.game1MvpScore,
+                    summoner.game2MvpScore,
+                    summoner.game3MvpScore,
+                    summoner.game4MvpScore,
+                    summoner.game5MvpScore
+                ]
+            )
             # print(f"{summoner.name}, Total: {summoner.MvpScoreTotal}, Game 1: {summoner.game1MvpScore}, Game 2: {summoner.game2MvpScore}, Game 3: {summoner.game3MvpScore}, Game 4: {summoner.game4MvpScore}, Game 5: {summoner.game5MvpScore}")
 
         playerWithHighestScore = max(summoners, key=lambda x: x.MvpScoreTotal)
@@ -435,7 +511,7 @@ def update(force, daily, returnData=False, generate=True):
 
     print(f"\r{datetime.now().strftime('%I:%M:%S %p %d/%m/%Y')}", end="", flush=True)
 
-    if generate and (list[1] or force):
+    if generate and list[0] and (list[1] or force):
         generateImage(list[0], daily)
     if returnData:
         return list
@@ -582,11 +658,12 @@ def checkForNewPatchNotes(jsonFilePath, forceUpdate):
 
 
 def numberOfSummoners(wiggleRoom):
-    jsonFata = openJsonFile(jsonFile)
+    jsonData = openJsonFile(jsonFile) or {}
     
-    summoners = jsonFata.get("summoners")
-    if not isinstance(summoners, list):
-        summoners = []
+    summoners = jsonData.get("summoners")
+    if isinstance(summoners, (dict, list)):
+        count = len(summoners)
+    else:
+        count = 0
 
-    count = len(summoners) + wiggleRoom
-    return count
+    return count + wiggleRoom

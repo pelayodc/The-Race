@@ -7,7 +7,7 @@ from disnake import ApplicationCommandInteraction
 from disnake.ext import commands, tasks
 import requests
 from utils.commonUtils import requestLimit, jsonFile, dailyPostTimer, discordChannel, platforms, regions, riotApKey, discordToken
-from utils.dataUtils import checkForNewPatchNotes, numberOfSummoners, update, crownData, mvpData
+from utils.dataUtils import checkForNewPatchNotes, numberOfSummoners, update, crownData, mvpData, riotBackoffRemaining, riotBackoffTimestamp
 from utils.jsonUtils import openJsonFile, writeToJsonFile
 
 bot = commands.InteractionBot()
@@ -499,9 +499,16 @@ if __name__ == "__main__":
 
     @tasks.loop(seconds=60)
     async def updateRaceImage():
-        interval = math.floor(60 * numberOfSummoners(5) / (requestLimit * 0.7))
+        safeRequestLimit = requestLimit if requestLimit and requestLimit > 0 else 100
+        calculatedInterval = math.floor(60 * numberOfSummoners(5) / (safeRequestLimit * 0.7))
+        interval = max(calculatedInterval, 120)
 
         updateRaceImage.change_interval(seconds=interval)
+
+        if riotBackoffRemaining() > 0:
+            retryTime = datetime.fromtimestamp(riotBackoffTimestamp()).strftime("%H:%M:%S")
+            print(f"Skipping Riot update until {retryTime} due to rate limit")
+            return
 
         json_data = openJsonFile(jsonFile)
         lastRunTime = json_data['runtime']
@@ -518,7 +525,7 @@ if __name__ == "__main__":
             writeToJsonFile("data.json", json_data)
             force_leaderboard = not json_data.get("leaderboardMessageId")
             summoners, updated = update(force_leaderboard, True, returnData=True, generate=False)
-            if updated or force_leaderboard:
+            if summoners and (updated or force_leaderboard):
                 channel = await get_discord_channel(discordChannel)
                 if not channel:
                     return
@@ -528,7 +535,7 @@ if __name__ == "__main__":
         else:
             force_leaderboard = not json_data.get("leaderboardMessageId")
             summoners, updated = update(force_leaderboard, False, returnData=True, generate=False)
-            if updated or force_leaderboard:
+            if summoners and (updated or force_leaderboard):
                 channel = await get_discord_channel(discordChannel)
                 if not channel:
                     return
