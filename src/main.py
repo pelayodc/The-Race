@@ -738,6 +738,41 @@ def format_cached_rank(summoner_data):
     return f"{rank_icon(tier)} **{tier} {rank} - {league_points} LP**"
 
 
+def format_signed_delta(value):
+    if value is None:
+        return "-"
+    if value > 0:
+        return f"+{value}"
+    return str(value)
+
+
+def cached_daily_change_text(summoner_data):
+    score = summoner_data.get("score")
+    daily_score = summoner_data.get("dailyScore")
+    games_played = summoner_data.get("gamesPlayed")
+    daily_games_played = summoner_data.get("dailyGamesPlayed")
+    position = summoner_data.get("leaderboardPosition")
+    daily_position = summoner_data.get("dailyLeaderboardPosition")
+
+    score_delta = score - daily_score if score is not None and daily_score is not None else None
+    games_delta = games_played - daily_games_played if games_played is not None and daily_games_played is not None else None
+    position_delta = daily_position - position if position is not None and daily_position is not None else None
+    if position_delta is None:
+        position_text = "-"
+    elif position_delta > 0:
+        position_text = f"+{position_delta} positions"
+    elif position_delta < 0:
+        position_text = f"{position_delta} positions"
+    else:
+        position_text = "No position change"
+
+    return (
+        f"LP/score: **{format_signed_delta(score_delta)}**\n"
+        f"Games: **{format_signed_delta(games_delta)}**\n"
+        f"Leaderboard: **{position_text}**"
+    )
+
+
 def format_match_duration(seconds):
     if not seconds:
         return "-"
@@ -787,6 +822,10 @@ def cached_recent_games(json_data, summoner_name, limit=5):
             "damage": participant.get("totalDamageDealtToChampions"),
             "duration": info.get("gameDuration"),
             "creation": info.get("gameCreation"),
+            "position": participant.get("teamPosition") or participant.get("individualPosition") or participant.get("lane"),
+            "cs": participant.get("totalMinionsKilled", 0) + participant.get("neutralMinionsKilled", 0),
+            "vision": participant.get("visionScore"),
+            "killParticipation": participant.get("challenges", {}).get("killParticipation"),
         })
     return games
 
@@ -806,9 +845,12 @@ def format_cached_game_line(index, game):
     kda = f"{game.get('kills', 0)}/{game.get('deaths', 0)}/{game.get('assists', 0)}"
     damage = format_compact_damage(game.get("damage"))
     duration = format_match_duration(game.get("duration"))
+    position = game.get("position") or "-"
+    cs = game.get("cs", "-")
+    vision = game.get("vision", "-")
     return (
         f"**{index}.** {game_result_icon(game)} **{game.get('champion', 'Unknown')}** "
-        f"- {kda} - {damage} dmg - {duration}"
+        f"({position}) - {kda} - {damage} dmg - {cs} CS - {vision} vision - {duration}"
     )
 
 
@@ -824,13 +866,24 @@ def cached_games_summary(games):
     deaths = sum(game.get("deaths", 0) for game in cached)
     assists = sum(game.get("assists", 0) for game in cached)
     damage_values = [game.get("damage") for game in cached if game.get("damage") is not None]
+    kill_participation_values = [
+        game.get("killParticipation")
+        for game in cached
+        if game.get("killParticipation") is not None
+    ]
     avg_damage = sum(damage_values) / len(damage_values) if damage_values else None
+    avg_kill_participation = (
+        sum(kill_participation_values) / len(kill_participation_values)
+        if kill_participation_values else None
+    )
     kda_ratio = (kills + assists) / max(1, deaths)
+    kp_text = f"{avg_kill_participation * 100:.0f}%" if avg_kill_participation is not None else "-"
 
     return (
         f"Results: **{wins}W / {losses}L / {remakes}R**\n"
         f"Total KDA: **{kills}/{deaths}/{assists}** ({kda_ratio:.2f})\n"
-        f"Avg damage: **{format_compact_damage(avg_damage)}**"
+        f"Avg damage: **{format_compact_damage(avg_damage)}**\n"
+        f"Avg kill participation: **{kp_text}**"
     )
 
 
@@ -859,6 +912,7 @@ def personal_report_embed(json_data, member):
     embed.add_field(name="Rank", value=format_cached_rank(summoner_data), inline=False)
     embed.add_field(name="Leaderboard", value=f"Position: **#{leaderboard_position}**\nScore: **{summoner_data.get('score', 0)}**", inline=True)
     embed.add_field(name="Ranked games", value=f"Total cached games played: **{games_played if games_played is not None else '-'}**", inline=True)
+    embed.add_field(name="Today's cached change", value=cached_daily_change_text(summoner_data), inline=True)
 
     if linked_summoners:
         linked_text = "\n".join(
@@ -2342,17 +2396,6 @@ class StatusLogsAdminView(disnake.ui.View):
             return
 
         await inter.response.send_message(embed=recent_logs_embed(), ephemeral=True)
-
-    @disnake.ui.button(label="Download logs", style=disnake.ButtonStyle.gray, custom_id="admin:status:download_logs", row=2)
-    async def download_logs(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
-        if not await require_admin_interaction(inter):
-            return
-
-        if not os.path.exists(AUDIT_LOG_PATH):
-            await inter.response.send_message("No audit log file exists yet.", ephemeral=True)
-            return
-
-        await inter.response.send_message("Audit log file:", file=disnake.File(AUDIT_LOG_PATH), ephemeral=True)
 
     @disnake.ui.button(label="Audit summary 24h", style=disnake.ButtonStyle.blurple, custom_id="admin:audit:summary_24h", row=4)
     async def audit_summary_24h(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
