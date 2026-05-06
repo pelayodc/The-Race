@@ -250,6 +250,7 @@ def ensure_matchmaking_state(json_data):
 def ensure_admin_state(json_data):
     ensure_matchmaking_state(json_data)
     json_data.setdefault("discordLinks", {})
+    json_data.setdefault("leaderboardChatCommandsEnabled", False)
     json_data.setdefault("adminMessageId", None)
     json_data.setdefault("leaderboardLastUpdateAt", None)
     json_data.setdefault("leaderboardLastUpdateMode", None)
@@ -257,6 +258,10 @@ def ensure_admin_state(json_data):
     json_data.setdefault("leaderboardLastEstimatedApiCalls", 0)
     json_data.setdefault("lastRiotError", None)
     return json_data
+
+
+def leaderboard_chat_commands_enabled(json_data):
+    return bool(json_data.get("leaderboardChatCommandsEnabled", False))
 
 
 def effective_matchmaking_separate_channels(json_data):
@@ -593,6 +598,7 @@ def admin_embed(json_data):
     embed.add_field(name="Linked Discord users", value=str(len(linked_accounts)), inline=True)
     embed.add_field(name="Matchmaking queue", value=f"{len(queue)}/10", inline=True)
     embed.add_field(name="Separate channels", value=f"{'On' if effective_matchmaking_separate_channels(json_data) else 'Off'} ({forced_mode_text(json_data)})", inline=True)
+    embed.add_field(name="Leaderboard chat commands", value="Enabled" if leaderboard_chat_commands_enabled(json_data) else "Disabled", inline=True)
     embed.add_field(name="Leaderboard status", value=json_data.get("leaderboardLastUpdateStatus") or "Unknown", inline=True)
     embed.set_footer(text="Administration actions require Manage Server.")
     return embed
@@ -1188,6 +1194,20 @@ class SettingsAdminView(disnake.ui.View):
         message = await configure_matchmaking_channel(channel, interaction_actor(inter))
         await inter.followup.send(message, ephemeral=True)
 
+    @disnake.ui.button(label="Toggle /add /remove", style=disnake.ButtonStyle.gray, custom_id="admin:settings:leaderboard_chat_commands", row=2)
+    async def toggle_leaderboard_chat_commands(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        json_data = ensure_admin_state(load_json_data())
+        json_data["leaderboardChatCommandsEnabled"] = not leaderboard_chat_commands_enabled(json_data)
+        writeToJsonFile(jsonFile, json_data)
+        enabled = leaderboard_chat_commands_enabled(json_data)
+        status = "enabled" if enabled else "disabled"
+        log_event("leaderboard_chat_commands_toggle", actor=interaction_actor(inter), status="success", summary=f"Leaderboard /add and /remove commands {status}.", details={"enabled": enabled})
+        await refresh_configured_admin_message(json_data)
+        await inter.response.edit_message(embed=settings_admin_embed(json_data), view=SettingsAdminView())
+
 
 class LeaderboardUsersAdminView(disnake.ui.View):
     def __init__(self, json_data):
@@ -1360,13 +1380,16 @@ class AdminView(disnake.ui.View):
 
 
 def settings_admin_embed(json_data):
+    ensure_admin_state(json_data)
+    commands_status = "Enabled" if leaderboard_chat_commands_enabled(json_data) else "Disabled"
     embed = disnake.Embed(
         title="App settings",
-        description="Select the channels used by persistent bot messages.",
+        description="Select the channels used by persistent bot messages and control chat command shortcuts.",
         colour=disnake.Colour.dark_teal()
     )
     embed.add_field(name="Leaderboard", value=f"<#{leaderboard_channel_id(json_data)}>", inline=True)
     embed.add_field(name="Matchmaking", value=f"<#{matchmaking_channel_id(json_data)}>", inline=True)
+    embed.add_field(name="/add and /remove", value=f"**{commands_status}**\nWhen enabled, anyone can use them from chat.", inline=False)
     return embed
 
 
@@ -1878,20 +1901,34 @@ if __name__ == "__main__":
 
     @bot.slash_command(description="Add summoner to the list")
     async def add(inter: ApplicationCommandInteraction, name: str, tagline: str, platform: str = commands.Param(choices=platforms), region: str = commands.Param(choices=regions)):
-        await inter.response.defer()
+        await inter.response.defer(ephemeral=True)
+        json_data = ensure_admin_state(load_json_data())
+        if not leaderboard_chat_commands_enabled(json_data):
+            message = "/add is disabled from App settings. Use the administration panel or enable the chat commands there."
+            log_event("leaderboard_summoner_add", actor=interaction_actor(inter), status="error", summary=message, details={"name": name, "tagline": tagline, "platform": platform, "region": region})
+            await inter.send(message, ephemeral=True)
+            return
+
         success, message = await add_summoner_to_data(name, tagline, platform, region)
         log_event("leaderboard_summoner_add", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"name": name, "tagline": tagline, "platform": platform, "region": region})
         await refresh_configured_admin_message()
-        await inter.send(message)
+        await inter.send(message, ephemeral=True)
 
 
     @bot.slash_command(description="Remove summoner from the list")
     async def remove(inter: ApplicationCommandInteraction, name: str, tagline: str):
-        await inter.response.defer()
+        await inter.response.defer(ephemeral=True)
+        json_data = ensure_admin_state(load_json_data())
+        if not leaderboard_chat_commands_enabled(json_data):
+            message = "/remove is disabled from App settings. Use the administration panel or enable the chat commands there."
+            log_event("leaderboard_summoner_remove", actor=interaction_actor(inter), status="error", summary=message, details={"name": name, "tagline": tagline})
+            await inter.send(message, ephemeral=True)
+            return
+
         success, message = remove_summoner_from_data(name, tagline)
         log_event("leaderboard_summoner_remove", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"name": name, "tagline": tagline})
         await refresh_configured_admin_message()
-        await inter.send(message)
+        await inter.send(message, ephemeral=True)
 
     print(discordToken)
     bot.run(discordToken)
