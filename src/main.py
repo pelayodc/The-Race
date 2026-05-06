@@ -1,6 +1,7 @@
 import math
 import os
 import random
+from itertools import combinations
 from datetime import datetime, timedelta, timezone
 import disnake
 import pytz
@@ -15,6 +16,13 @@ from utils.auditUtils import AUDIT_LOG_PATH, interaction_actor, log_event, read_
 bot = commands.InteractionBot()
 matchmaking_view_registered = False
 MAX_SELECT_OPTIONS = 25
+MATCHMAKING_TEAM_MODES = ["random", "balanced_rank", "captains"]
+MATCHMAKING_TEAM_MODE_LABELS = {
+    "random": "Random",
+    "balanced_rank": "Balanced rank",
+    "captains": "Captains"
+}
+CAPTAIN_DRAFT_TIMEOUT_SECONDS = 90
 
 
 def rank_icon(tier):
@@ -244,6 +252,11 @@ def ensure_matchmaking_state(json_data):
     json_data.setdefault("matchmakingSeparateChannelsForced", None)
     json_data.setdefault("matchmakingTeamChannelIds", [])
     json_data.setdefault("matchmakingInProgress", False)
+    if json_data.get("matchmakingTeamMode") not in MATCHMAKING_TEAM_MODES:
+        json_data["matchmakingTeamMode"] = "random"
+    if json_data.get("matchmakingTeamModeForced") not in MATCHMAKING_TEAM_MODES:
+        json_data["matchmakingTeamModeForced"] = None
+    json_data.setdefault("matchmakingDraft", None)
     return json_data
 
 
@@ -280,6 +293,25 @@ def forced_mode_text(json_data):
     return "Unlocked"
 
 
+def effective_matchmaking_team_mode(json_data):
+    forced_mode = json_data.get("matchmakingTeamModeForced")
+    if forced_mode in MATCHMAKING_TEAM_MODES:
+        return forced_mode
+    mode = json_data.get("matchmakingTeamMode")
+    return mode if mode in MATCHMAKING_TEAM_MODES else "random"
+
+
+def team_mode_label(mode):
+    return MATCHMAKING_TEAM_MODE_LABELS.get(mode, "Random")
+
+
+def team_mode_lock_text(json_data):
+    forced_mode = json_data.get("matchmakingTeamModeForced")
+    if forced_mode in MATCHMAKING_TEAM_MODES:
+        return f"Forced {team_mode_label(forced_mode)}"
+    return "Unlocked"
+
+
 def user_queue_index(queue, user_id):
     user_id = str(user_id)
     for index, player in enumerate(queue):
@@ -296,6 +328,218 @@ def remove_user_from_matchmaking_queue(json_data, user_id):
         return False
     del queue[index]
     return True
+
+
+def player_id(player):
+    return str(player.get("userId"))
+
+
+def player_score(player, neutral_score=0):
+    score = player.get("score")
+    if score is None:
+        return neutral_score
+    try:
+        return int(score)
+    except (TypeError, ValueError):
+        return neutral_score
+
+
+def neutral_unlinked_score(players):
+    linked_scores = [player_score(player, 0) for player in players if player.get("summonerFullName")]
+    if not linked_scores:
+        return 0
+    return round(sum(linked_scores) / len(linked_scores))
+
+
+def matchmaking_player_label(player, include_score=False, neutral_score=0):
+    summoner = player.get("summonerFullName") or "Unlinked"
+    label = f"<@{player['userId']}> - {summoner}"
+    if include_score:
+        label += f" ({player_score(player, neutral_score)})"
+    return label
+
+
+def format_team(players, neutral_score=0):
+    if not players:
+        return "-"
+    return "\n".join(matchmaking_player_label(player, True, neutral_score) for player in players)
+
+
+def players_by_id(players):
+    return {player_id(player): player for player in players}
+
+
+def next_team_mode(current_mode):
+    if current_mode not in MATCHMAKING_TEAM_MODES:
+        return "random"
+    index = MATCHMAKING_TEAM_MODES.index(current_mode)
+    return MATCHMAKING_TEAM_MODES[(index + 1) % len(MATCHMAKING_TEAM_MODES)]
+
+
+def balanced_rank_teams(players):
+    neutral_score = neutral_unlinked_score(players)
+    target_size = len(players) // 2
+    allowed_sizes = {target_size}
+    if len(players) % 2:
+        allowed_sizes.add(target_size + 1)
+
+    best_team_one = None
+    best_diff = None
+    indexed_players = list(enumerate(players))
+    total_score = sum(player_score(player, neutral_score) for player in players)
+
+    for team_size in allowed_sizes:
+        for combo in combinations(indexed_players, team_size):
+            team_one_indexes = {index for index, _ in combo}
+            team_one_score = sum(player_score(player, neutral_score) for _, player in combo)
+            diff = abs(total_score - (team_one_score * 2))
+            if best_diff is None or diff < best_diff:
+                best_diff = diff
+                best_team_one = team_one_indexes
+
+    team_one = [player for index, player in indexed_players if index in best_team_one]
+    team_two = [player for index, player in indexed_players if index not in best_team_one]
+    return team_one, team_two
+
+
+def random_teams(players):
+    shuffled_players = players[:]
+    random.shuffle(shuffled_players)
+    return shuffled_players[::2], shuffled_players[1::2]
+
+
+def select_captains(players):
+    linked_players = [player for player in players if player.get("summonerFullName")]
+    captain_pool = linked_players if len(linked_players) >= 2 else players
+    return random.sample(captain_pool, 2)
+
+
+def build_captain_pick_order(captain_ids, pick_count):
+    first, second = captain_ids
+    pattern = [first, second, second, first]
+    return [pattern[index % len(pattern)] for index in range(pick_count)]
+
+
+def draft_team_key(draft, captain_id):
+    if str(captain_id) == str(draft["captainIds"][0]):
+        return "teamOne"
+    return "teamTwo"
+
+
+def draft_team_for_player_id(draft, user_id):
+    user_id = str(user_id)
+    if user_id in [str(value) for value in draft.get("teamOne", [])]:
+        return "teamOne"
+    if user_id in [str(value) for value in draft.get("teamTwo", [])]:
+        return "teamTwo"
+    return None
+
+
+def normalize_draft_turn(draft):
+    remaining = [str(user_id) for user_id in draft.get("remainingPlayerIds", [])]
+    draft["remainingPlayerIds"] = remaining
+    if not remaining:
+        draft["turnCaptainId"] = None
+        return draft
+
+    max_team_size = math.ceil((len(remaining) + len(draft.get("teamOne", [])) + len(draft.get("teamTwo", []))) / 2)
+    pick_order = [str(user_id) for user_id in draft.get("pickOrder", [])]
+    pick_index = int(draft.get("pickIndex", 0))
+    while pick_index < len(pick_order):
+        captain_id = pick_order[pick_index]
+        team_key = draft_team_key(draft, captain_id)
+        if len(draft.get(team_key, [])) < max_team_size:
+            draft["pickIndex"] = pick_index
+            draft["turnCaptainId"] = captain_id
+            return draft
+        pick_index += 1
+
+    draft["turnCaptainId"] = pick_order[-1] if pick_order else draft["captainIds"][0]
+    draft["pickIndex"] = len(pick_order)
+    return draft
+
+
+def create_captain_draft(players, starter_user_id):
+    captains = select_captains(players)
+    captain_ids = [player_id(captain) for captain in captains]
+    first_pick_captain_id = random.choice(captain_ids)
+    second_captain_id = captain_ids[1] if first_pick_captain_id == captain_ids[0] else captain_ids[0]
+    remaining_player_ids = [player_id(player) for player in players if player_id(player) not in captain_ids]
+    draft = {
+        "captainIds": captain_ids,
+        "teamOne": [captain_ids[0]],
+        "teamTwo": [captain_ids[1]],
+        "remainingPlayerIds": remaining_player_ids,
+        "turnCaptainId": first_pick_captain_id,
+        "pickOrder": build_captain_pick_order([first_pick_captain_id, second_captain_id], len(remaining_player_ids)),
+        "pickIndex": 0,
+        "startedByUserId": str(starter_user_id),
+        "lastTurnAt": datetime.now(timezone.utc).timestamp()
+    }
+    return normalize_draft_turn(draft)
+
+
+def apply_draft_pick(json_data, picked_user_id, autopick=False):
+    draft = json_data.get("matchmakingDraft")
+    if not draft:
+        return False, "No captain draft is currently active."
+
+    picked_user_id = str(picked_user_id)
+    remaining = [str(user_id) for user_id in draft.get("remainingPlayerIds", [])]
+    if picked_user_id not in remaining:
+        return False, "That player is no longer available."
+
+    captain_id = str(draft.get("turnCaptainId"))
+    team_key = draft_team_key(draft, captain_id)
+    draft.setdefault(team_key, []).append(picked_user_id)
+    draft["remainingPlayerIds"] = [user_id for user_id in remaining if user_id != picked_user_id]
+    draft["pickIndex"] = int(draft.get("pickIndex", 0)) + 1
+    draft["lastTurnAt"] = datetime.now(timezone.utc).timestamp()
+    normalize_draft_turn(draft)
+    picked_player = players_by_id(json_data.get("matchmakingQueue", [])).get(picked_user_id, {"userId": picked_user_id})
+    source = "Autopicked" if autopick else "Picked"
+    return True, f"{source} {matchmaking_player_label(picked_player)}."
+
+
+def captain_draft_teams(json_data):
+    draft = json_data.get("matchmakingDraft") or {}
+    by_id = players_by_id(json_data.get("matchmakingQueue", []))
+    team_one = [by_id[user_id] for user_id in [str(value) for value in draft.get("teamOne", [])] if user_id in by_id]
+    team_two = [by_id[user_id] for user_id in [str(value) for value in draft.get("teamTwo", [])] if user_id in by_id]
+    return team_one, team_two
+
+
+def is_draft_complete(json_data):
+    draft = json_data.get("matchmakingDraft")
+    return bool(draft is not None and not draft.get("remainingPlayerIds"))
+
+
+def cancel_matchmaking_draft(json_data):
+    json_data["matchmakingDraft"] = None
+    return json_data
+
+
+def remove_player_from_matchmaking_draft(json_data, user_id):
+    draft = json_data.get("matchmakingDraft")
+    if not draft:
+        return False, False
+
+    user_id = str(user_id)
+    if user_id in [str(value) for value in draft.get("captainIds", [])]:
+        json_data["matchmakingDraft"] = None
+        return True, True
+
+    changed = False
+    for key in ["remainingPlayerIds", "teamOne", "teamTwo"]:
+        values = [str(value) for value in draft.get(key, [])]
+        filtered = [value for value in values if value != user_id]
+        if filtered != values:
+            draft[key] = filtered
+            changed = True
+
+    if changed:
+        normalize_draft_turn(draft)
+    return changed, False
 
 
 def normalize_tagline(tagline):
@@ -460,7 +704,10 @@ def primary_summoner_queue_data(json_data, user_id):
         "puuid": summoner_data.get("puuid"),
         "platform": summoner_data.get("platform"),
         "region": summoner_data.get("region"),
-        "score": summoner_data.get("score", 0)
+        "score": summoner_data.get("score", 0),
+        "tier": summoner_data.get("tier"),
+        "rank": summoner_data.get("rank"),
+        "leaguePoints": summoner_data.get("leaguePoints")
     }
 
 
@@ -545,17 +792,33 @@ def matchmaking_embed(json_data):
     ensure_matchmaking_state(json_data)
     queue = json_data["matchmakingQueue"]
     separate_channels = effective_matchmaking_separate_channels(json_data)
-    mode_text = forced_mode_text(json_data)
+    separate_mode_text = forced_mode_text(json_data)
+    team_mode = effective_matchmaking_team_mode(json_data)
+    team_mode_text = team_mode_label(team_mode)
+    team_mode_lock = team_mode_lock_text(json_data)
+    draft = json_data.get("matchmakingDraft")
     ready_text = "Ready to start" if len(queue) >= 2 else "Waiting for at least 2 players"
+    if draft:
+        ready_text = "Captain draft in progress"
 
     embed = disnake.Embed(
         title="Matchmaking",
-        description=f"{ready_text}\nPlayers: **{len(queue)}/10**\nSeparate channels: **{'On' if separate_channels else 'Off'}**\nAdmin lock: **{mode_text}**",
+        description=f"{ready_text}\nPlayers: **{len(queue)}/10**\nTeam mode: **{team_mode_text}** ({team_mode_lock})\nSeparate channels: **{'On' if separate_channels else 'Off'}** ({separate_mode_text})",
         colour=disnake.Colour.blurple(),
         timestamp=datetime.now()
     )
 
-    if queue:
+    if draft:
+        by_id = players_by_id(queue)
+        neutral_score = neutral_unlinked_score(queue)
+        team_one, team_two = captain_draft_teams(json_data)
+        remaining = [by_id[user_id] for user_id in [str(value) for value in draft.get("remainingPlayerIds", [])] if user_id in by_id]
+        turn = draft.get("turnCaptainId")
+        embed.add_field(name="Turn", value=f"<@{turn}> must pick a player." if turn else "Draft is finishing.", inline=False)
+        embed.add_field(name="Team 1", value=format_team(team_one, neutral_score), inline=True)
+        embed.add_field(name="Team 2", value=format_team(team_two, neutral_score), inline=True)
+        embed.add_field(name="Remaining players", value=format_team(remaining, neutral_score), inline=False)
+    elif queue:
         players = []
         for index, player in enumerate(queue, start=1):
             user = f"<@{player['userId']}>"
@@ -568,7 +831,7 @@ def matchmaking_embed(json_data):
 
     embed.add_field(
         name="Controls",
-        value="Use the buttons below to join, leave, toggle separate voice channels, or start the match.",
+        value="Use the buttons below to join, leave, change team mode, toggle separate voice channels, or start the match.",
         inline=False
     )
     embed.set_footer(text="Join requires being in a voice channel.")
@@ -598,6 +861,7 @@ def admin_embed(json_data):
     embed.add_field(name="Linked Discord users", value=str(len(linked_accounts)), inline=True)
     embed.add_field(name="Matchmaking queue", value=f"{len(queue)}/10", inline=True)
     embed.add_field(name="Separate channels", value=f"{'On' if effective_matchmaking_separate_channels(json_data) else 'Off'} ({forced_mode_text(json_data)})", inline=True)
+    embed.add_field(name="Team mode", value=f"{team_mode_label(effective_matchmaking_team_mode(json_data))} ({team_mode_lock_text(json_data)})", inline=True)
     embed.add_field(name="Leaderboard chat commands", value="Enabled" if leaderboard_chat_commands_enabled(json_data) else "Disabled", inline=True)
     embed.add_field(name="Leaderboard status", value=json_data.get("leaderboardLastUpdateStatus") or "Unknown", inline=True)
     embed.set_footer(text="Administration actions require Manage Server.")
@@ -796,25 +1060,11 @@ async def active_matchmaking_queue(guild, json_data):
     return active_queue
 
 
-async def start_matchmaking_queue(guild, json_data):
-    json_data = ensure_matchmaking_state(json_data)
-    queue = await active_matchmaking_queue(guild, json_data)
-
-    if len(queue) < 2:
-        writeToJsonFile(jsonFile, json_data)
-        return False, "At least 2 players are required to start.", json_data
-    if len(queue) > 10:
-        writeToJsonFile(jsonFile, json_data)
-        return False, "The queue cannot contain more than 10 players.", json_data
-
+async def finish_matchmaking_teams(guild, json_data, team_one, team_two, mode):
     json_data["matchmakingInProgress"] = True
     writeToJsonFile(jsonFile, json_data)
-
-    players = queue[:]
-    random.shuffle(players)
-    team_one = players[::2]
-    team_two = players[1::2]
     created_channels = []
+    players = team_one + team_two
 
     if effective_matchmaking_separate_channels(json_data):
         try:
@@ -841,6 +1091,7 @@ async def start_matchmaking_queue(guild, json_data):
                     await member.move_to(team_two_channel)
         except disnake.Forbidden:
             json_data["matchmakingInProgress"] = False
+            json_data["matchmakingDraft"] = None
             writeToJsonFile(jsonFile, json_data)
             for channel_id in created_channels:
                 channel = guild.get_channel(int(channel_id))
@@ -852,6 +1103,7 @@ async def start_matchmaking_queue(guild, json_data):
             return False, "I do not have permission to create voice channels or move members.", json_data
         except disnake.HTTPException:
             json_data["matchmakingInProgress"] = False
+            json_data["matchmakingDraft"] = None
             writeToJsonFile(jsonFile, json_data)
             for channel_id in created_channels:
                 channel = guild.get_channel(int(channel_id))
@@ -863,13 +1115,110 @@ async def start_matchmaking_queue(guild, json_data):
             return False, "Discord rejected the channel creation or member move request.", json_data
 
     json_data["matchmakingQueue"] = []
+    json_data["matchmakingDraft"] = None
     json_data["matchmakingTeamChannelIds"] = created_channels
     json_data["matchmakingInProgress"] = False
     writeToJsonFile(jsonFile, json_data)
 
-    team_one_text = ", ".join(f"<@{player['userId']}>" for player in team_one)
-    team_two_text = ", ".join(f"<@{player['userId']}>" for player in team_two)
-    return True, f"Match started.\nTeam 1: {team_one_text}\nTeam 2: {team_two_text}", json_data
+    neutral_score = neutral_unlinked_score(players)
+    team_one_score = sum(player_score(player, neutral_score) for player in team_one)
+    team_two_score = sum(player_score(player, neutral_score) for player in team_two)
+    team_one_mentions = ", ".join(f"<@{player['userId']}>" for player in team_one)
+    team_two_mentions = ", ".join(f"<@{player['userId']}>" for player in team_two)
+    message = (
+        f"Match started ({team_mode_label(mode)}).\n"
+        f"Team 1 ({team_one_score}): {team_one_mentions}\n"
+        f"Team 2 ({team_two_score}): {team_two_mentions}"
+    )
+    return True, message, json_data
+
+
+async def start_matchmaking_queue(guild, json_data, starter_user_id=None):
+    json_data = ensure_matchmaking_state(json_data)
+    queue = await active_matchmaking_queue(guild, json_data)
+
+    if len(queue) < 2:
+        writeToJsonFile(jsonFile, json_data)
+        return False, "At least 2 players are required to start.", json_data
+    if len(queue) > 10:
+        writeToJsonFile(jsonFile, json_data)
+        return False, "The queue cannot contain more than 10 players.", json_data
+
+    mode = effective_matchmaking_team_mode(json_data)
+    if mode == "captains":
+        if json_data.get("matchmakingDraft"):
+            writeToJsonFile(jsonFile, json_data)
+            return False, "A captain draft is already active.", json_data
+        json_data["matchmakingDraft"] = create_captain_draft(queue, starter_user_id or queue[0]["userId"])
+        if is_draft_complete(json_data):
+            return await finish_captain_draft_if_complete(guild, json_data)
+        writeToJsonFile(jsonFile, json_data)
+        captains = ", ".join(f"<@{captain_id}>" for captain_id in json_data["matchmakingDraft"]["captainIds"])
+        return True, f"Captain draft started. Captains: {captains}.", json_data
+
+    if mode == "balanced_rank":
+        team_one, team_two = balanced_rank_teams(queue)
+    else:
+        team_one, team_two = random_teams(queue)
+
+    return await finish_matchmaking_teams(guild, json_data, team_one, team_two, mode)
+
+
+async def finish_captain_draft_if_complete(guild, json_data):
+    if not is_draft_complete(json_data):
+        return False, None, json_data
+    team_one, team_two = captain_draft_teams(json_data)
+    return await finish_matchmaking_teams(guild, json_data, team_one, team_two, "captains")
+
+
+class CaptainPickSelect(disnake.ui.Select):
+    def __init__(self, json_data):
+        draft = json_data.get("matchmakingDraft") or {}
+        by_id = players_by_id(json_data.get("matchmakingQueue", []))
+        options = []
+        for user_id in [str(value) for value in draft.get("remainingPlayerIds", [])][:MAX_SELECT_OPTIONS]:
+            player = by_id.get(user_id)
+            if not player:
+                continue
+            summoner = player.get("summonerFullName") or "Unlinked"
+            label = f"{player.get('displayName') or user_id} - {summoner}"
+            options.append(disnake.SelectOption(label=label[:100], value=user_id))
+        super().__init__(
+            placeholder="Pick a player for your team",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="matchmaking:captains:pick_select"
+        )
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        await inter.response.defer(ephemeral=True)
+        json_data = ensure_matchmaking_state(load_json_data())
+        draft = json_data.get("matchmakingDraft")
+        if not draft:
+            await inter.followup.send("No captain draft is currently active.", ephemeral=True)
+            return
+        if str(draft.get("turnCaptainId")) != str(inter.author.id):
+            await inter.followup.send("It is not your turn to pick.", ephemeral=True)
+            return
+
+        success, message = apply_draft_pick(json_data, self.values[0])
+        if not success:
+            await inter.followup.send(message, ephemeral=True)
+            return
+
+        finished, finish_message, json_data = await finish_captain_draft_if_complete(inter.guild, json_data)
+        writeToJsonFile(jsonFile, json_data)
+        await refresh_configured_matchmaking_message(json_data)
+        await refresh_configured_admin_message(json_data)
+        log_event("matchmaking_captain_pick", actor=interaction_actor(inter), status="success", summary=message, details={"pickedUserId": str(self.values[0]), "finished": finished})
+        await inter.followup.send(f"{message}\n{finish_message or 'Waiting for the next captain pick.'}", ephemeral=True)
+
+
+class CaptainPickView(disnake.ui.View):
+    def __init__(self, json_data):
+        super().__init__(timeout=90)
+        self.add_item(CaptainPickSelect(json_data))
 
 
 class MatchmakingView(disnake.ui.View):
@@ -886,6 +1235,9 @@ class MatchmakingView(disnake.ui.View):
             return
 
         json_data = ensure_matchmaking_state(load_json_data())
+        if json_data.get("matchmakingDraft"):
+            await inter.followup.send("A captain draft is already active. Wait for it to finish before joining.", ephemeral=True)
+            return
         queue = json_data["matchmakingQueue"]
         index = user_queue_index(queue, member.id)
         if index is not None:
@@ -919,12 +1271,25 @@ class MatchmakingView(disnake.ui.View):
         if not remove_user_from_matchmaking_queue(json_data, inter.author.id):
             await inter.followup.send("You are not in the matchmaking queue.", ephemeral=True)
             return
+        draft_changed, draft_cancelled = remove_player_from_matchmaking_draft(json_data, inter.author.id)
 
-        writeToJsonFile(jsonFile, json_data)
+        finished_message = None
+        if json_data.get("matchmakingDraft") and is_draft_complete(json_data):
+            success, finished_message, json_data = await finish_captain_draft_if_complete(inter.guild, json_data)
+            log_event("matchmaking_captain_draft_finished", actor=interaction_actor(inter), status="success" if success else "error", summary=finished_message or "Captain draft finished after queue leave.")
+        else:
+            writeToJsonFile(jsonFile, json_data)
         await refresh_configured_matchmaking_message(json_data)
         await refresh_configured_admin_message(json_data)
         log_event("matchmaking_leave", actor=interaction_actor(inter), status="success", summary="User left matchmaking queue.")
-        await inter.followup.send("You left the matchmaking queue.", ephemeral=True)
+        if draft_cancelled:
+            log_event("matchmaking_captain_draft_cancelled", actor=interaction_actor(inter), status="error", summary="Captain draft cancelled because a captain left the queue.")
+            await inter.followup.send("You left the matchmaking queue. Captain draft cancelled.", ephemeral=True)
+        elif draft_changed:
+            log_event("matchmaking_captain_draft_player_removed", actor=interaction_actor(inter), status="success", summary="User left active captain draft.")
+            await inter.followup.send(f"You left the matchmaking queue and were removed from the captain draft.\n{finished_message or ''}".strip(), ephemeral=True)
+        else:
+            await inter.followup.send("You left the matchmaking queue.", ephemeral=True)
 
     @disnake.ui.button(label="Separate channels", style=disnake.ButtonStyle.blurple, custom_id="matchmaking:separate_channels")
     async def separate_channels(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -946,6 +1311,45 @@ class MatchmakingView(disnake.ui.View):
         log_event("matchmaking_separate_channels_toggle", actor=interaction_actor(inter), status="success", summary=f"Separate channels {mode}.")
         await inter.followup.send(f"Separate channels {mode}.", ephemeral=True)
 
+    @disnake.ui.button(label="Team mode", style=disnake.ButtonStyle.blurple, custom_id="matchmaking:team_mode")
+    async def team_mode(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        await inter.response.defer(ephemeral=True)
+        json_data = ensure_matchmaking_state(load_json_data())
+        if json_data.get("matchmakingDraft"):
+            await inter.followup.send("Team mode cannot be changed during a captain draft.", ephemeral=True)
+            return
+        if json_data.get("matchmakingTeamModeForced") in MATCHMAKING_TEAM_MODES:
+            await inter.followup.send(f"Team mode is locked by administration: {team_mode_lock_text(json_data)}.", ephemeral=True)
+            return
+        if user_queue_index(json_data["matchmakingQueue"], inter.author.id) is None:
+            await inter.followup.send("Only queued players can change team mode.", ephemeral=True)
+            return
+
+        json_data["matchmakingTeamMode"] = next_team_mode(json_data.get("matchmakingTeamMode"))
+        writeToJsonFile(jsonFile, json_data)
+        await refresh_configured_matchmaking_message(json_data)
+        await refresh_configured_admin_message(json_data)
+        mode = team_mode_label(effective_matchmaking_team_mode(json_data))
+        log_event("matchmaking_team_mode_toggle", actor=interaction_actor(inter), status="success", summary=f"Team mode set to {mode}.", details={"mode": json_data["matchmakingTeamMode"]})
+        await inter.followup.send(f"Team mode set to {mode}.", ephemeral=True)
+
+    @disnake.ui.button(label="Pick player", style=disnake.ButtonStyle.green, custom_id="matchmaking:captains:pick")
+    async def pick_player(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        json_data = ensure_matchmaking_state(load_json_data())
+        draft = json_data.get("matchmakingDraft")
+        if not draft:
+            await inter.response.send_message("No captain draft is currently active.", ephemeral=True)
+            return
+        if str(draft.get("turnCaptainId")) != str(inter.author.id):
+            await inter.response.send_message("It is not your turn to pick.", ephemeral=True)
+            return
+        by_id = players_by_id(json_data.get("matchmakingQueue", []))
+        available_remaining = [user_id for user_id in [str(value) for value in draft.get("remainingPlayerIds", [])] if user_id in by_id]
+        if not available_remaining:
+            await inter.response.send_message("There are no players left to pick.", ephemeral=True)
+            return
+        await inter.response.send_message("Choose a player for your team.", view=CaptainPickView(json_data), ephemeral=True)
+
     @disnake.ui.button(label="Start match", style=disnake.ButtonStyle.gray, custom_id="matchmaking:start")
     async def start_match(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
         await inter.response.defer(ephemeral=True)
@@ -958,10 +1362,10 @@ class MatchmakingView(disnake.ui.View):
             await inter.followup.send("Only queued players can start matchmaking.", ephemeral=True)
             return
 
-        success, message, json_data = await start_matchmaking_queue(inter.guild, json_data)
+        success, message, json_data = await start_matchmaking_queue(inter.guild, json_data, inter.author.id)
         await refresh_configured_matchmaking_message(json_data)
         await refresh_configured_admin_message(json_data)
-        log_event("matchmaking_start", actor=interaction_actor(inter), status="success" if success else "error", summary=message)
+        log_event("matchmaking_start", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"mode": effective_matchmaking_team_mode(json_data)})
         await inter.followup.send(message, ephemeral=True)
 
 
@@ -1149,8 +1553,18 @@ class QueueRemoveSelect(disnake.ui.Select):
         json_data = ensure_matchmaking_state(load_json_data())
         user_id = self.values[0]
         removed = remove_user_from_matchmaking_queue(json_data, user_id)
-        writeToJsonFile(jsonFile, json_data)
+        draft_changed, draft_cancelled = remove_player_from_matchmaking_draft(json_data, user_id)
+        finished_message = None
+        if json_data.get("matchmakingDraft") and is_draft_complete(json_data):
+            success, finished_message, json_data = await finish_captain_draft_if_complete(inter.guild, json_data)
+            log_event("matchmaking_captain_draft_finished", actor=interaction_actor(inter), status="success" if success else "error", summary=finished_message or "Captain draft finished after admin kick.")
+        else:
+            writeToJsonFile(jsonFile, json_data)
         response = f"Removed <@{user_id}> from the queue." if removed else "That user is no longer in the queue."
+        if draft_cancelled:
+            response += " Captain draft cancelled."
+        elif draft_changed and finished_message:
+            response += f"\n{finished_message}"
         log_event("matchmaking_queue_kick", actor=interaction_actor(inter), status="success" if removed else "error", summary=response, details={"userId": str(user_id)})
         await refresh_configured_matchmaking_message(json_data)
         await refresh_configured_admin_message(json_data)
@@ -1260,21 +1674,21 @@ class MatchmakingAdminView(disnake.ui.View):
 
         await inter.response.defer(ephemeral=True)
         json_data = ensure_matchmaking_state(load_json_data())
-        success, message, json_data = await start_matchmaking_queue(inter.guild, json_data)
+        success, message, json_data = await start_matchmaking_queue(inter.guild, json_data, inter.author.id)
         log_event("matchmaking_force_start", actor=interaction_actor(inter), status="success" if success else "error", summary=message)
         await refresh_configured_matchmaking_message(json_data)
         await refresh_configured_admin_message(json_data)
         await inter.followup.send(message, ephemeral=True)
 
-    @disnake.ui.button(label="Unlocked", style=disnake.ButtonStyle.gray, custom_id="admin:matchmaking:unlock")
+    @disnake.ui.button(label="Voice unlocked", style=disnake.ButtonStyle.gray, custom_id="admin:matchmaking:unlock", row=1)
     async def unlock_mode(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
         await self.set_forced_mode(inter, None)
 
-    @disnake.ui.button(label="Forced on", style=disnake.ButtonStyle.blurple, custom_id="admin:matchmaking:force_on")
+    @disnake.ui.button(label="Voice forced on", style=disnake.ButtonStyle.blurple, custom_id="admin:matchmaking:force_on", row=1)
     async def force_on(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
         await self.set_forced_mode(inter, True)
 
-    @disnake.ui.button(label="Forced off", style=disnake.ButtonStyle.red, custom_id="admin:matchmaking:force_off")
+    @disnake.ui.button(label="Voice forced off", style=disnake.ButtonStyle.red, custom_id="admin:matchmaking:force_off", row=1)
     async def force_off(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
         await self.set_forced_mode(inter, False)
 
@@ -1286,6 +1700,38 @@ class MatchmakingAdminView(disnake.ui.View):
         json_data["matchmakingSeparateChannelsForced"] = value
         writeToJsonFile(jsonFile, json_data)
         log_event("matchmaking_separate_channels_forced", actor=interaction_actor(inter), status="success", summary=f"Separate channels lock set to {forced_mode_text(json_data)}", details={"forced": value})
+        await refresh_configured_matchmaking_message(json_data)
+        await refresh_configured_admin_message(json_data)
+        await inter.response.edit_message(embed=matchmaking_admin_embed(json_data), view=MatchmakingAdminView(json_data))
+
+    @disnake.ui.button(label="Team unlocked", style=disnake.ButtonStyle.gray, custom_id="admin:matchmaking:team_unlock", row=2)
+    async def unlock_team_mode(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        await self.set_forced_team_mode(inter, None)
+
+    @disnake.ui.button(label="Force random", style=disnake.ButtonStyle.gray, custom_id="admin:matchmaking:team_random", row=2)
+    async def force_random_team_mode(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        await self.set_forced_team_mode(inter, "random")
+
+    @disnake.ui.button(label="Force balanced", style=disnake.ButtonStyle.blurple, custom_id="admin:matchmaking:team_balanced", row=2)
+    async def force_balanced_team_mode(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        await self.set_forced_team_mode(inter, "balanced_rank")
+
+    @disnake.ui.button(label="Force captains", style=disnake.ButtonStyle.green, custom_id="admin:matchmaking:team_captains", row=2)
+    async def force_captains_team_mode(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        await self.set_forced_team_mode(inter, "captains")
+
+    async def set_forced_team_mode(self, inter, value):
+        if not await require_admin_interaction(inter):
+            return
+
+        json_data = ensure_matchmaking_state(load_json_data())
+        if json_data.get("matchmakingDraft"):
+            await send_ephemeral(inter, "Team mode cannot be locked while a captain draft is active.")
+            return
+        json_data["matchmakingTeamModeForced"] = value
+        writeToJsonFile(jsonFile, json_data)
+        mode_text = team_mode_lock_text(json_data)
+        log_event("matchmaking_team_mode_forced", actor=interaction_actor(inter), status="success", summary=f"Team mode lock set to {mode_text}", details={"forced": value})
         await refresh_configured_matchmaking_message(json_data)
         await refresh_configured_admin_message(json_data)
         await inter.response.edit_message(embed=matchmaking_admin_embed(json_data), view=MatchmakingAdminView(json_data))
@@ -1427,10 +1873,19 @@ def matchmaking_admin_embed(json_data):
     ensure_matchmaking_state(json_data)
     embed = disnake.Embed(
         title="Matchmaking administration",
-        description=f"Queue: **{len(json_data['matchmakingQueue'])}/10**\nSeparate channels: **{'On' if effective_matchmaking_separate_channels(json_data) else 'Off'}**\nAdmin lock: **{forced_mode_text(json_data)}**",
+        description=(
+            f"Queue: **{len(json_data['matchmakingQueue'])}/10**\n"
+            f"Team mode: **{team_mode_label(effective_matchmaking_team_mode(json_data))}**\n"
+            f"Team mode lock: **{team_mode_lock_text(json_data)}**\n"
+            f"Separate channels: **{'On' if effective_matchmaking_separate_channels(json_data) else 'Off'}**\n"
+            f"Voice lock: **{forced_mode_text(json_data)}**"
+        ),
         colour=disnake.Colour.blurple()
     )
     embed.add_field(name="Queued players", value=format_matchmaking_queue(json_data), inline=False)
+    if json_data.get("matchmakingDraft"):
+        draft = json_data["matchmakingDraft"]
+        embed.add_field(name="Captain draft", value=f"Turn: <@{draft.get('turnCaptainId')}>\nRemaining: **{len(draft.get('remainingPlayerIds', []))}**", inline=False)
     return embed
 
 
@@ -1542,6 +1997,50 @@ async def delete_empty_matchmaking_team_channels(guild):
         writeToJsonFile(jsonFile, json_data)
 
 
+async def process_captain_draft_timeout():
+    json_data = ensure_matchmaking_state(load_json_data())
+    draft = json_data.get("matchmakingDraft")
+    if not draft or not draft.get("remainingPlayerIds"):
+        return
+
+    last_turn_at = float(draft.get("lastTurnAt", 0))
+    if datetime.now(timezone.utc).timestamp() - last_turn_at < CAPTAIN_DRAFT_TIMEOUT_SECONDS:
+        return
+
+    by_id = players_by_id(json_data.get("matchmakingQueue", []))
+    remaining_players = [
+        by_id[user_id]
+        for user_id in [str(value) for value in draft.get("remainingPlayerIds", [])]
+        if user_id in by_id
+    ]
+    if not remaining_players:
+        json_data["matchmakingDraft"] = None
+        writeToJsonFile(jsonFile, json_data)
+        await refresh_configured_matchmaking_message(json_data)
+        await refresh_configured_admin_message(json_data)
+        log_event("matchmaking_captain_draft_cancelled", actor=system_actor(), status="error", summary="Captain draft cancelled because no remaining players were available.")
+        return
+
+    neutral_score = neutral_unlinked_score(json_data.get("matchmakingQueue", []))
+    picked_player = max(remaining_players, key=lambda player: player_score(player, neutral_score))
+    success, message = apply_draft_pick(json_data, picked_player["userId"], autopick=True)
+    if not success:
+        log_event("matchmaking_captain_autopick", actor=system_actor(), status="error", summary=message)
+        return
+
+    channel = await get_discord_channel(matchmaking_channel_id(json_data))
+    guild = channel.guild if channel else None
+    if guild:
+        finished, finish_message, json_data = await finish_captain_draft_if_complete(guild, json_data)
+    else:
+        finished, finish_message = False, None
+
+    writeToJsonFile(jsonFile, json_data)
+    await refresh_configured_matchmaking_message(json_data)
+    await refresh_configured_admin_message(json_data)
+    log_event("matchmaking_captain_autopick", actor=system_actor(), status="success", summary=finish_message or message, details={"pickedUserId": str(picked_player["userId"]), "finished": finished})
+
+
 if __name__ == "__main__":
 
     @bot.event
@@ -1562,6 +2061,8 @@ if __name__ == "__main__":
         if not updateRaceImage.is_running():
             updateRaceImage.start()
             updatePatchNotes.start()
+        if not captainDraftTimeout.is_running():
+            captainDraftTimeout.start()
 
 
     @bot.event
@@ -1578,13 +2079,22 @@ if __name__ == "__main__":
         if index is not None:
             if after.channel is None:
                 del queue[index]
+                draft_changed, draft_cancelled = remove_player_from_matchmaking_draft(json_data, member.id)
                 queue_changed = True
+                if draft_cancelled:
+                    log_event("matchmaking_captain_draft_cancelled", actor=system_actor(), status="error", summary=f"Captain draft cancelled because <@{member.id}> left voice.", details={"userId": str(member.id)})
+                elif draft_changed:
+                    log_event("matchmaking_captain_draft_player_removed", actor=system_actor(), status="success", summary=f"<@{member.id}> removed from active captain draft.", details={"userId": str(member.id)})
             else:
                 queue[index]["voiceChannelId"] = after.channel.id
                 queue_changed = True
 
         if queue_changed:
-            writeToJsonFile(jsonFile, json_data)
+            if json_data.get("matchmakingDraft") and is_draft_complete(json_data):
+                success, message, json_data = await finish_captain_draft_if_complete(member.guild, json_data)
+                log_event("matchmaking_captain_draft_finished", actor=system_actor(), status="success" if success else "error", summary=message or "Captain draft finished after voice update.")
+            else:
+                writeToJsonFile(jsonFile, json_data)
             channel = await get_discord_channel(matchmaking_channel_id(json_data))
             if channel:
                 await refresh_matchmaking_message(channel, json_data)
@@ -1614,6 +2124,14 @@ if __name__ == "__main__":
                     await channel.send(message, file=image)
             else:
                 await channel.send(message)
+
+
+    @tasks.loop(seconds=15)
+    async def captainDraftTimeout():
+        try:
+            await process_captain_draft_timeout()
+        except Exception as error:
+            log_event("matchmaking_captain_timeout_error", actor=system_actor(), status="error", summary=f"Captain draft timeout failed: {error}")
 
 
     @tasks.loop(seconds=60)
