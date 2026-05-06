@@ -1,4 +1,5 @@
 .idea/*
+/.env
 /src/.env
 /src/data.json
 /src/Daily Rank list.png

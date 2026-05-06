@@ -37,7 +37,7 @@ AUDIT_CATEGORY_PREFIXES = {
     "admin": ["admin_", "leaderboard_channel_changed", "matchmaking_channel_changed"],
     "matchmaking": ["matchmaking_"],
     "riot": ["riot_", "leaderboard_update_skipped"],
-    "leaderboard": ["leaderboard_"],
+    "leaderboard": ["leaderboard_", "personal_report_"],
     "links": ["discord_link_"],
     "operations": ["operations_"],
 }
@@ -727,6 +727,157 @@ def primary_summoner_queue_data(json_data, user_id):
         "rank": summoner_data.get("rank"),
         "leaguePoints": summoner_data.get("leaguePoints")
     }
+
+
+def format_cached_rank(summoner_data):
+    tier = summoner_data.get("tier")
+    rank = summoner_data.get("rank")
+    league_points = summoner_data.get("leaguePoints")
+    if not tier or rank is None or league_points is None:
+        return "No cached ranked data yet."
+    return f"{rank_icon(tier)} **{tier} {rank} - {league_points} LP**"
+
+
+def format_match_duration(seconds):
+    if not seconds:
+        return "-"
+    minutes = int(seconds) // 60
+    remaining_seconds = int(seconds) % 60
+    return f"{minutes}:{remaining_seconds:02d}"
+
+
+def format_compact_damage(value):
+    if value is None:
+        return "-"
+    return f"{round(value / 1000, 1)}k"
+
+
+def cached_match_participant(match_data, puuid):
+    for participant in match_data.get("info", {}).get("participants", []):
+        if participant.get("puuid") == puuid:
+            return participant
+    return None
+
+
+def cached_recent_games(json_data, summoner_name, limit=5):
+    summoner_data = (json_data.get("summoners") or {}).get(summoner_name, {})
+    puuid = summoner_data.get("puuid")
+    games = []
+    for match_id in summoner_data.get("recentMatchIds", [])[:limit]:
+        match_data = (json_data.get("matchData") or {}).get(match_id)
+        if not match_data or not puuid:
+            games.append({"matchId": match_id, "cached": False})
+            continue
+
+        participant = cached_match_participant(match_data, puuid)
+        if not participant:
+            games.append({"matchId": match_id, "cached": False})
+            continue
+
+        info = match_data.get("info", {})
+        games.append({
+            "matchId": match_id,
+            "cached": True,
+            "champion": participant.get("championName", "Unknown"),
+            "kills": participant.get("kills", 0),
+            "deaths": participant.get("deaths", 0),
+            "assists": participant.get("assists", 0),
+            "win": participant.get("win"),
+            "remake": participant.get("gameEndedInEarlySurrender", False) or info.get("gameDuration", 0) < 300,
+            "damage": participant.get("totalDamageDealtToChampions"),
+            "duration": info.get("gameDuration"),
+            "creation": info.get("gameCreation"),
+        })
+    return games
+
+
+def game_result_icon(game):
+    if not game.get("cached"):
+        return "▫️"
+    if game.get("remake"):
+        return "➖"
+    return "✅" if game.get("win") else "❌"
+
+
+def format_cached_game_line(index, game):
+    if not game.get("cached"):
+        return f"**{index}.** ▫️ Match data not cached"
+
+    kda = f"{game.get('kills', 0)}/{game.get('deaths', 0)}/{game.get('assists', 0)}"
+    damage = format_compact_damage(game.get("damage"))
+    duration = format_match_duration(game.get("duration"))
+    return (
+        f"**{index}.** {game_result_icon(game)} **{game.get('champion', 'Unknown')}** "
+        f"- {kda} - {damage} dmg - {duration}"
+    )
+
+
+def cached_games_summary(games):
+    cached = [game for game in games if game.get("cached")]
+    if not cached:
+        return "No cached match details available."
+
+    wins = len([game for game in cached if game.get("win") and not game.get("remake")])
+    losses = len([game for game in cached if game.get("win") is False and not game.get("remake")])
+    remakes = len([game for game in cached if game.get("remake")])
+    kills = sum(game.get("kills", 0) for game in cached)
+    deaths = sum(game.get("deaths", 0) for game in cached)
+    assists = sum(game.get("assists", 0) for game in cached)
+    damage_values = [game.get("damage") for game in cached if game.get("damage") is not None]
+    avg_damage = sum(damage_values) / len(damage_values) if damage_values else None
+    kda_ratio = (kills + assists) / max(1, deaths)
+
+    return (
+        f"Results: **{wins}W / {losses}L / {remakes}R**\n"
+        f"Total KDA: **{kills}/{deaths}/{assists}** ({kda_ratio:.2f})\n"
+        f"Avg damage: **{format_compact_damage(avg_damage)}**"
+    )
+
+
+def personal_report_embed(json_data, member):
+    rebuild_discord_links_from_summoners(json_data)
+    summoner_name = primary_summoner_for_user(json_data, member.id)
+    if not summoner_name:
+        return None
+
+    summoners = json_data.get("summoners") or {}
+    summoner_data = summoners.get(summoner_name, {})
+    linked_summoners = linked_summoners_for_user(json_data, member.id)
+    games = cached_recent_games(json_data, summoner_name)
+    leaderboard_position = summoner_data.get("leaderboardPosition")
+    games_played = summoner_data.get("gamesPlayed")
+    last_update = json_data.get("leaderboardLastUpdateAt", "Unknown")
+    last_status = json_data.get("leaderboardLastUpdateStatus", "unknown")
+
+    embed = disnake.Embed(
+        title=f"{member.display_name} report",
+        description=f"Primary account: **{summoner_name}**",
+        colour=disnake.Colour.blurple(),
+        timestamp=datetime.now()
+    )
+    embed.set_author(name="The Race")
+    embed.add_field(name="Rank", value=format_cached_rank(summoner_data), inline=False)
+    embed.add_field(name="Leaderboard", value=f"Position: **#{leaderboard_position}**\nScore: **{summoner_data.get('score', 0)}**", inline=True)
+    embed.add_field(name="Ranked games", value=f"Total cached games played: **{games_played if games_played is not None else '-'}**", inline=True)
+
+    if linked_summoners:
+        linked_text = "\n".join(
+            f"{'•' if linked == summoner_name else '-'} {linked}"
+            for linked in linked_summoners[:8]
+        )
+        if len(linked_summoners) > 8:
+            linked_text += f"\n...and {len(linked_summoners) - 8} more."
+        embed.add_field(name="Linked accounts", value=linked_text[:1024], inline=False)
+
+    embed.add_field(name="Last cached games", value=cached_games_summary(games), inline=False)
+    if games:
+        game_lines = "\n".join(format_cached_game_line(index, game) for index, game in enumerate(games, start=1))
+        embed.add_field(name="Recent match detail", value=game_lines[:1024], inline=False)
+    else:
+        embed.add_field(name="Recent match detail", value="No recent match IDs cached yet.", inline=False)
+
+    embed.set_footer(text=f"Cache only. Last leaderboard update: {last_update} ({last_status})")
+    return embed
 
 
 def format_linked_accounts_summary(json_data):
@@ -2655,6 +2806,25 @@ if __name__ == "__main__":
         for summoner in jsonData['summoners']:
             summonerList.append(summoner)
         await inter.send("\n".join(summonerList))
+
+
+    @bot.slash_command(description="Show your cached leaderboard report")
+    async def me(inter: ApplicationCommandInteraction, user: disnake.Member = None, private: bool = True):
+        await inter.response.defer(ephemeral=private)
+        target = user or inter.author
+        json_data = ensure_admin_state(load_json_data())
+        embed = personal_report_embed(json_data, target)
+        if not embed:
+            message = (
+                f"{target.mention} does not have a linked leaderboard account yet. "
+                "Ask an admin to link one from the administration panel or with /linkdiscord."
+            )
+            log_event("personal_report_view", actor=interaction_actor(inter), status="error", summary=message, details={"targetUserId": str(target.id)})
+            await inter.send(message, ephemeral=private)
+            return
+
+        log_event("personal_report_view", actor=interaction_actor(inter), status="success", summary=f"Cached personal report viewed for {target.display_name}.", details={"targetUserId": str(target.id)})
+        await inter.send(embed=embed, ephemeral=private)
 
 
     @bot.slash_command(description="Patch notes")

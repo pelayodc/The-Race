@@ -6,6 +6,7 @@ SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECT_ROOT = os.path.dirname(SRC_DIR)
 
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+load_dotenv(os.path.join(SRC_DIR, ".env"))
 
 
 def env_int(name, default):

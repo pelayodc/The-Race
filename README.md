@@ -63,7 +63,8 @@
 
 ### Setup
 - install requirements.txt
-- Add your keys and config in a .env file and run main.py
+- Add your keys and config in a `.env` file at the project root. A legacy `src/.env` file is also supported.
+- run `python src/main.py` from the project root, or `python main.py` from `src`.
 
 ### About
 
