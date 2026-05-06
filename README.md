@@ -17,13 +17,11 @@
 -   👑 MVP
     -   Crown holder
     -   MVP banner for each game
-    -   MVP breakdown for games
     -   Customizable MVP algorithm using z-score normalisation
 -   🧾 Patch notes
     -   Tracks and posts official patch note releases
 -   Other
     -   Add/Remove summoners from any region
-    -   Display needed LP for grandmaster & challenger
     -   Crown holder leaderboard
     -   If the summoner is master+, displays the server rank
     -   Supports new champions and patch releases 
@@ -50,24 +48,9 @@
     <img style="border-radius: 15px; display: block; margin-left: auto; margin-right: auto; margin-bottom:20px;" width="50%" src="img/Screenshot_2.png"></img>
      <hr style="border-radius: 2%; margin-top: 60px; margin-bottom: 60px;" noshade="" size="20" width="100%">
         <div align="center">
-    Example of /mvp
-</div>
-    <img style="border-radius: 15px; display: block; margin-left: auto; margin-right: auto; margin-bottom:20px;" width="50%" src="img/Screenshot_3.png"></img>
-     <hr style="border-radius: 2%; margin-top: 60px; margin-bottom: 60px;" noshade="" size="20" width="100%">
-        <div align="center">
     Example of /patch being used, the bot will automatically post this when new patch notes come out, but you can manually request it
 </div>
     <img style="border-radius: 15px; display: block; margin-left: auto; margin-right: auto; margin-bottom:20px;" width="50%" src="img/Screenshot_4.png"></img>
-     <hr style="border-radius: 2%; margin-top: 60px; margin-bottom: 60px;" noshade="" size="20" width="100%">
-        <div align="center">
-    Example of /chall
-</div>
-    <img style="border-radius: 15px; display: block; margin-left: auto; margin-right: auto; margin-bottom:20px;" width="50%" src="img/Screenshot_5.png"></img>
-     <hr style="border-radius: 2%; margin-top: 60px; margin-bottom: 60px;" noshade="" size="20" width="100%">
-        <div align="center">
-    Example of /crown
-</div>
-    <img style="border-radius: 15px; display: block; margin-left: auto; margin-right: auto; margin-bottom:20px;" width="50%" src="img/Screenshot_6.png"></img>
 </div>
 
 ## Install

@@ -9,7 +9,7 @@ from disnake import ApplicationCommandInteraction
 from disnake.ext import commands, tasks
 import requests
 from utils.commonUtils import requestLimit, jsonFile, dailyPostTimer, discordChannel, platforms, regions, riotApKey, discordToken
-from utils.dataUtils import checkForNewPatchNotes, numberOfSummoners, update, crownData, mvpData, riotBackoffRemaining, riotBackoffTimestamp
+from utils.dataUtils import checkForNewPatchNotes, numberOfSummoners, update, riotBackoffRemaining, riotBackoffTimestamp
 from utils.jsonUtils import openJsonFile, writeToJsonFile
 from utils.auditUtils import AUDIT_LOG_PATH, interaction_actor, log_event, read_audit_events, recent_error_events, system_actor
 
@@ -2105,7 +2105,7 @@ if __name__ == "__main__":
 
     @tasks.loop(minutes=120)
     async def updatePatchNotes():
-        updateAvailable, updatedPatch, daysAgo, daysTillNext, fullUrl, imagePath = checkForNewPatchNotes("data.json", False)
+        updateAvailable, updatedPatch, daysAgo, daysTillNext, fullUrl, imagePath = checkForNewPatchNotes(jsonFile, False)
         if daysAgo > 12:
             updatePatchNotes.change_interval(minutes=15)
 
@@ -2164,7 +2164,7 @@ if __name__ == "__main__":
         # If it's past 9pm and last run time is before 9pm today, update the image
         if currentTime.timestamp() > dailyTime > lastRunTime:
             json_data['runtime'] = dailyTime
-            writeToJsonFile("data.json", json_data)
+            writeToJsonFile(jsonFile, json_data)
             force_leaderboard = not json_data.get("leaderboardMessageId")
             summoners, updated = update(force_leaderboard, True, returnData=True, generate=False)
             status = "updated" if summoners and (updated or force_leaderboard) else "no_changes" if summoners else "skipped"
@@ -2177,7 +2177,7 @@ if __name__ == "__main__":
                     return
                 latest_json_data = openJsonFile(jsonFile)
                 latest_json_data['leaderboardMessageId'] = await send_or_edit_leaderboard(channel, latest_json_data, summoners, True, dateStr)
-                writeToJsonFile("data.json", latest_json_data)
+                writeToJsonFile(jsonFile, latest_json_data)
             await refresh_configured_admin_message()
         else:
             force_leaderboard = not json_data.get("leaderboardMessageId")
@@ -2192,7 +2192,7 @@ if __name__ == "__main__":
                     return
                 latest_json_data = openJsonFile(jsonFile)
                 latest_json_data['leaderboardMessageId'] = await send_or_edit_leaderboard(channel, latest_json_data, summoners)
-                writeToJsonFile("data.json", latest_json_data)
+                writeToJsonFile(jsonFile, latest_json_data)
             await refresh_configured_admin_message()
 
 
@@ -2206,34 +2206,10 @@ if __name__ == "__main__":
         await inter.send("\n".join(summonerList))
 
 
-    @bot.slash_command(description="lp needed for challenger and grandmaster")
-    async def chall(inter: ApplicationCommandInteraction, platform: str = commands.Param(choices=platforms)):
-        await inter.response.defer()
-
-        mastersUrl = f"https://{platform}.api.riotgames.com/lol/league/v4/masterleagues/by-queue/RANKED_SOLO_5x5?api_key=RGAPI-f42c18f5-4234-48aa-b354-c977e092238d"
-        grandMastersUrl = f"https://{platform}.api.riotgames.com/lol/league/v4/grandmasterleagues/by-queue/RANKED_SOLO_5x5?api_key=RGAPI-f42c18f5-4234-48aa-b354-c977e092238d"
-        challengerUrl = f"https://{platform}.api.riotgames.com/lol/league/v4/challengerleagues/by-queue/RANKED_SOLO_5x5?api_key=RGAPI-f42c18f5-4234-48aa-b354-c977e092238d"
-        combinedHighEloPlayers = []
-        for url in [mastersUrl, grandMastersUrl, challengerUrl]:
-            response = requests.get(url)
-            if response.status_code == 200:
-                players = response.json().get("entries", [])
-                combinedHighEloPlayers.extend(players)
-            else:
-                print(f"Failed to fetch data from {url}. Status code:", response.status_code)
-
-        sortedHighEloPlayers = sorted(combinedHighEloPlayers, key=lambda x: (-x["leaguePoints"], x["summonerName"]))
-
-        challenger_lp_needed = sortedHighEloPlayers[299]["leaguePoints"] + 1 if len(sortedHighEloPlayers) > 299 else None
-        grandmaster_lp_needed = sortedHighEloPlayers[999]["leaguePoints"] + 1 if len(sortedHighEloPlayers) > 999 else None
-
-        await inter.send(f"{platform}\nLP needed for Challenger: {challenger_lp_needed}\nLP needed for Grandmaster: {grandmaster_lp_needed}")
-
-
     @bot.slash_command(description="Patch notes")
     async def patch(inter: ApplicationCommandInteraction):
         await inter.response.defer()
-        update_available, updated_patch, days_ago, days_till_next, full_url, image_path = checkForNewPatchNotes("data.json", True)
+        update_available, updated_patch, days_ago, days_till_next, full_url, image_path = checkForNewPatchNotes(jsonFile, True)
         if update_available:
             # print("There is a new patch available. Patch version:", updated_patch, full_url, "Image saved at:", image_path)
             message = (f'Patch {updated_patch}\n'
@@ -2384,39 +2360,6 @@ if __name__ == "__main__":
         await inter.send(message, ephemeral=True)
 
 
-    @bot.slash_command(description="breakdown of mvp score for a given game")
-    async def mvp(inter: ApplicationCommandInteraction, name: str, tagline: str, region: str = commands.Param(choices=regions), game: int = commands.Param(choices=[1, 2, 3, 4, 5])):
-        await inter.response.defer()
-        response = requests.get(
-            f'https://{region}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{name}/{tagline}?api_key={riotApKey}'
-        )
-        if response.status_code == 200:
-            apiData1 = response.json()
-            summonerPuuid = apiData1['puuid']
-            summonerName = apiData1['gameName']
-            summonerTagline = apiData1['tagLine']
-            riotApiData = requests.get(f'https://{region}.api.riotgames.com/lol/match/v5/matches/by-puuid/{summonerPuuid}/ids?queue=420&start=0&count=5&api_key={riotApKey}').json()
-
-            matchId = riotApiData[game - 1]
-            mvpData(matchId)
-
-            with open("mvp data.txt", 'rb') as f:
-                dataFile = disnake.File(f)
-            await inter.send(f'Mvp scores for: {summonerName}#{summonerTagline}, game: {game}', file=dataFile)
-        else:
-            summonerFullName = f"{name}#{tagline}"
-            await inter.send(f'Invalid summoner: {summonerFullName}')
-
-
-    @bot.slash_command(description="Mvp scores for all summoners")
-    async def crown(inter: ApplicationCommandInteraction):
-        await inter.response.defer()
-        crownData()
-        with open("crown data.txt", 'rb') as f:
-            dataFile = disnake.File(f)
-        await inter.send(f'Mvp scores', file=dataFile)
-
-
     @bot.slash_command(description="Add summoner to the list")
     async def add(inter: ApplicationCommandInteraction, name: str, tagline: str, platform: str = commands.Param(choices=platforms), region: str = commands.Param(choices=regions)):
         await inter.response.defer(ephemeral=True)
@@ -2448,5 +2391,6 @@ if __name__ == "__main__":
         await refresh_configured_admin_message()
         await inter.send(message, ephemeral=True)
 
-    print(discordToken)
+    if not discordToken:
+        raise RuntimeError("DISCORD_TOKEN is not configured.")
     bot.run(discordToken)

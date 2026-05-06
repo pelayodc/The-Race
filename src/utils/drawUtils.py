@@ -5,13 +5,13 @@ import requests
 from PIL import ImageFont
 from PIL import Image, ImageDraw
 
-from .commonUtils import version, Rank
+from .commonUtils import version, Rank, assetPath, outputPath
 
 
 def drawChampionPlaceholder(canvas, x, y, size):
     draw = ImageDraw.Draw(canvas)
     draw.ellipse((x, y, x + size, y + size), fill=(31, 32, 40), outline=(64, 68, 82), width=3)
-    font = ImageFont.truetype("ARIAL.TTF", max(18, size // 3))
+    font = ImageFont.truetype(assetPath("ARIAL.TTF"), max(18, size // 3))
     drawTextCentered(canvas, "-", x + size / 2, y + size / 2, font, (132, 138, 154))
 
 
@@ -21,7 +21,7 @@ def drawChampionImage(canvas, x, y, champ, win, remake, mvp, size=100, drawMvpBa
         return
 
     champName = "Fiddlesticks" if champ == "FiddleSticks" else champ
-    imgPath = f"Imgs/Champ icons/{champName}.png"
+    imgPath = assetPath("Imgs", "Champ icons", f"{champName}.png")
 
     try:
         if os.path.exists(imgPath):
@@ -57,7 +57,7 @@ def drawChampionImage(canvas, x, y, champ, win, remake, mvp, size=100, drawMvpBa
         if win:
             if mvp:
                 if drawMvpBadge:
-                    mvp = Image.open("Imgs/mvp win.png").convert("RGBA")
+                    mvp = Image.open(assetPath("Imgs", "mvp win.png")).convert("RGBA")
                     canvas.paste(mvp, (x + size - 20, y + size - 20), mvp)
                 strokeColor = (224, 206, 83)
             else:
@@ -184,7 +184,7 @@ def drawSmallMvpBadge(canvas, x, y):
     draw = ImageDraw.Draw(canvas)
     badgeBox = (x, y, x + 46, y + 20)
     draw.rounded_rectangle(badgeBox, radius=7, fill=(78, 54, 20), outline=(224, 206, 83), width=2)
-    font = ImageFont.truetype("ARIAL.TTF", 14)
+    font = ImageFont.truetype(assetPath("ARIAL.TTF"), 14)
     drawTextCentered(canvas, "MVP", x + 23, y + 10, font, (255, 232, 104))
 
 
@@ -354,23 +354,23 @@ def generateImage(summones, daily):
         for tier in Rank.iconPath
     }
 
-    hotStreakIcon = Image.open('Imgs/Fire emoji.png').convert("RGBA").resize((26, 26), resample=Image.BICUBIC)
-    coldStreakIcon = Image.open('Imgs/Skull emoji.png').convert("RGBA").resize((26, 26), resample=Image.BICUBIC)
-    crownIcon = Image.open("Imgs/crown.png").convert("RGBA").resize((32, 32), resample=Image.BICUBIC)
+    hotStreakIcon = Image.open(assetPath('Imgs', 'Fire emoji.png')).convert("RGBA").resize((26, 26), resample=Image.BICUBIC)
+    coldStreakIcon = Image.open(assetPath('Imgs', 'Skull emoji.png')).convert("RGBA").resize((26, 26), resample=Image.BICUBIC)
+    crownIcon = Image.open(assetPath("Imgs", "crown.png")).convert("RGBA").resize((32, 32), resample=Image.BICUBIC)
 
     fonts = {
-        "title": ImageFont.truetype("ARIAL.TTF", 42),
-        "subtitle": ImageFont.truetype("ARIAL.TTF", 22),
-        "label": ImageFont.truetype("ARIAL.TTF", 17),
-        "rank": ImageFont.truetype("ARIAL.TTF", 42),
-        "name": ImageFont.truetype("ARIAL.TTF", 35),
-        "tagline": ImageFont.truetype("ARIAL.TTF", 15),
-        "tier": ImageFont.truetype("ARIAL.TTF", 24),
-        "small": ImageFont.truetype("ARIAL.TTF", 16),
-        "change": ImageFont.truetype("ARIAL.TTF", 25),
-        "kda": ImageFont.truetype("ARIAL.TTF", 23),
-        "damage": ImageFont.truetype("ARIAL.TTF", 20),
-        "footer": ImageFont.truetype("ARIAL.TTF", 22),
+        "title": ImageFont.truetype(assetPath("ARIAL.TTF"), 42),
+        "subtitle": ImageFont.truetype(assetPath("ARIAL.TTF"), 22),
+        "label": ImageFont.truetype(assetPath("ARIAL.TTF"), 17),
+        "rank": ImageFont.truetype(assetPath("ARIAL.TTF"), 42),
+        "name": ImageFont.truetype(assetPath("ARIAL.TTF"), 35),
+        "tagline": ImageFont.truetype(assetPath("ARIAL.TTF"), 15),
+        "tier": ImageFont.truetype(assetPath("ARIAL.TTF"), 24),
+        "small": ImageFont.truetype(assetPath("ARIAL.TTF"), 16),
+        "change": ImageFont.truetype(assetPath("ARIAL.TTF"), 25),
+        "kda": ImageFont.truetype(assetPath("ARIAL.TTF"), 23),
+        "damage": ImageFont.truetype(assetPath("ARIAL.TTF"), 20),
+        "footer": ImageFont.truetype(assetPath("ARIAL.TTF"), 22),
     }
 
     drawHeader(canvas, daily, fonts, canvasWidth, headerHeight)
@@ -380,10 +380,10 @@ def generateImage(summones, daily):
         drawSummonerRow(canvas, summoner, index, y, daily, icons, hotStreakIcon, coldStreakIcon, crownIcon, fonts)
         y += rowHeight + rowGap
 
-    footerText = "SLASH COMMANDS: /add, /remove, /mvp, /crown, /list, /patch /chall"
+    footerText = "SLASH COMMANDS: /add, /remove, /list, /patch"
     drawTextCentered(canvas, footerText, canvasWidth / 2, y + 22, fonts["footer"], (178, 184, 199))
 
     if daily:
-        canvas.save('Daily Rank list.png')
+        canvas.save(outputPath('Daily Rank list.png'))
     else:
-        canvas.save('Rank list.png')
+        canvas.save(outputPath('Rank list.png'))

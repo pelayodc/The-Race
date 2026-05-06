@@ -2,18 +2,45 @@ import os
 import requests
 from dotenv import load_dotenv
 
-load_dotenv()
+SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(SRC_DIR)
+
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+
+
+def env_int(name, default):
+    value = os.getenv(name)
+    if value in (None, ""):
+        return default
+    try:
+        return int(value)
+    except ValueError as error:
+        raise RuntimeError(f"{name} must be an integer.") from error
+
+
+def assetPath(*parts):
+    return os.path.join(SRC_DIR, *parts)
+
+
+def outputPath(filename):
+    return os.path.join(PROJECT_ROOT, filename)
+
+
 riotApKey = os.getenv("RIOT_API_KEY")
 discordToken = os.getenv("DISCORD_TOKEN")
-discordChannel = int(os.getenv("DISCORD_CHANNEL"))
-requestLimit = int(os.getenv("REQUESTS"))
-dailyPostTimer = int(os.getenv("DAILY"))
+discordChannel = env_int("DISCORD_CHANNEL", 0)
+requestLimit = env_int("REQUESTS", 100)
+dailyPostTimer = env_int("DAILY", 21)
 
-jsonFile = "data.json"
+jsonFile = os.getenv("DATA_JSON", outputPath("data.json"))
 
 platforms = ["BR1", "EUN1", "EUW1", "JP1", "KR", "LA1", "LA2", "NA1", "OC1", "TR1", "RU", "PH2", "SG2", "TH2", "TW2", "VN2"]
 regions = ["AMERICAS", "EUROPE", "ASIA", "SEA"]
-version = requests.get('https://ddragon.leagueoflegends.com/api/versions.json').json()[0]
+
+try:
+    version = requests.get('https://ddragon.leagueoflegends.com/api/versions.json', timeout=10).json()[0]
+except (requests.RequestException, ValueError, KeyError, IndexError):
+    version = "15.9.1"
 
 statisticsForMvp = {
     "killParticipation": 1,
@@ -43,16 +70,16 @@ class Rank:
     rankOrder = {'IV': 1, 'III': 2, 'II': 3, 'I': 4}
 
     iconPath = {
-        'IRON': 'Imgs/Ranks/Iron.png',
-        'BRONZE': 'Imgs/Ranks/Bronze.png',
-        'SILVER': 'Imgs/Ranks/Silver.png',
-        'GOLD': 'Imgs/Ranks/Gold.png',
-        'PLATINUM': 'Imgs/Ranks/Platinum.png',
-        'EMERALD': 'Imgs/Ranks/Emerald.png',
-        'DIAMOND': 'Imgs/Ranks/Diamond.png',
-        'MASTER': 'Imgs/Ranks/Master.png',
-        'GRANDMASTER': 'Imgs/Ranks/Grandmaster.png',
-        'CHALLENGER': 'Imgs/Ranks/Challenger.png'
+        'IRON': assetPath('Imgs', 'Ranks', 'Iron.png'),
+        'BRONZE': assetPath('Imgs', 'Ranks', 'Bronze.png'),
+        'SILVER': assetPath('Imgs', 'Ranks', 'Silver.png'),
+        'GOLD': assetPath('Imgs', 'Ranks', 'Gold.png'),
+        'PLATINUM': assetPath('Imgs', 'Ranks', 'Platinum.png'),
+        'EMERALD': assetPath('Imgs', 'Ranks', 'Emerald.png'),
+        'DIAMOND': assetPath('Imgs', 'Ranks', 'Diamond.png'),
+        'MASTER': assetPath('Imgs', 'Ranks', 'Master.png'),
+        'GRANDMASTER': assetPath('Imgs', 'Ranks', 'Grandmaster.png'),
+        'CHALLENGER': assetPath('Imgs', 'Ranks', 'Challenger.png')
     }
 
     def rankToNumber(rank):
