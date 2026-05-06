@@ -249,6 +249,7 @@ def ensure_matchmaking_state(json_data):
 
 def ensure_admin_state(json_data):
     ensure_matchmaking_state(json_data)
+    json_data.setdefault("discordLinks", {})
     json_data.setdefault("adminMessageId", None)
     json_data.setdefault("leaderboardLastUpdateAt", None)
     json_data.setdefault("leaderboardLastUpdateMode", None)
@@ -305,6 +306,175 @@ def find_summoner_key(json_data, name, tagline):
     return None
 
 
+def parse_discord_user_id(value):
+    value = str(value).strip()
+    for char in ["<", ">", "@", "!"]:
+        value = value.replace(char, "")
+    return value if value.isdigit() else None
+
+
+async def discord_user_from_text(guild, value):
+    user_id = parse_discord_user_id(value)
+    if not user_id:
+        return None
+    return await get_guild_member(guild, user_id)
+
+
+def rebuild_discord_links_from_summoners(json_data):
+    links = {}
+    summoners = json_data.get("summoners") or {}
+
+    for summoner_name, summoner_data in summoners.items():
+        discord_user_id = summoner_data.get("discordUserId")
+        if not discord_user_id:
+            continue
+
+        discord_user_id = str(discord_user_id)
+        link = links.setdefault(discord_user_id, {
+            "displayName": summoner_data.get("discordDisplayName") or discord_user_id,
+            "summoners": [],
+            "primarySummoner": None
+        })
+        if summoner_name not in link["summoners"]:
+            link["summoners"].append(summoner_name)
+        if summoner_data.get("discordPrimary"):
+            link["primarySummoner"] = summoner_name
+
+    for discord_user_id, link in links.items():
+        if not link["primarySummoner"] and link["summoners"]:
+            link["primarySummoner"] = link["summoners"][0]
+            summoners[link["primarySummoner"]]["discordPrimary"] = True
+
+    json_data["discordLinks"] = links
+    return json_data
+
+
+def linked_summoners_for_user(json_data, user_id):
+    rebuild_discord_links_from_summoners(json_data)
+    link = json_data.get("discordLinks", {}).get(str(user_id), {})
+    return link.get("summoners", [])
+
+
+def primary_summoner_for_user(json_data, user_id):
+    rebuild_discord_links_from_summoners(json_data)
+    link = json_data.get("discordLinks", {}).get(str(user_id), {})
+    primary_summoner = link.get("primarySummoner")
+    if primary_summoner in (json_data.get("summoners") or {}):
+        return primary_summoner
+    summoners = link.get("summoners", [])
+    return summoners[0] if summoners else None
+
+
+def link_summoner_to_discord(json_data, user, summoner_full_name, primary=True):
+    rebuild_discord_links_from_summoners(json_data)
+    summoners = json_data.get("summoners") or {}
+    if summoner_full_name not in summoners:
+        return False, f"{summoner_full_name} has not been added"
+
+    user_id = str(user.id)
+    display_name = user.display_name
+    current_user_id = summoners[summoner_full_name].get("discordUserId")
+    if current_user_id and str(current_user_id) != user_id:
+        return False, f"{summoner_full_name} is already linked to <@{current_user_id}>"
+
+    link = json_data["discordLinks"].setdefault(user_id, {
+        "displayName": display_name,
+        "summoners": [],
+        "primarySummoner": None
+    })
+    link["displayName"] = display_name
+    if summoner_full_name not in link["summoners"]:
+        link["summoners"].append(summoner_full_name)
+
+    summoners[summoner_full_name]["discordUserId"] = user_id
+    summoners[summoner_full_name]["discordDisplayName"] = display_name
+    summoners[summoner_full_name]["discordLinkedAt"] = utc_now_iso()
+
+    if primary or not link.get("primarySummoner"):
+        for linked_summoner in link["summoners"]:
+            if linked_summoner in summoners:
+                summoners[linked_summoner]["discordPrimary"] = linked_summoner == summoner_full_name
+        link["primarySummoner"] = summoner_full_name
+    else:
+        summoners[summoner_full_name]["discordPrimary"] = False
+
+    return True, f"{summoner_full_name} linked to <@{user_id}>"
+
+
+def unlink_summoner_from_discord(json_data, summoner_full_name):
+    rebuild_discord_links_from_summoners(json_data)
+    summoners = json_data.get("summoners") or {}
+    if summoner_full_name not in summoners:
+        return False, f"{summoner_full_name} has not been added"
+
+    user_id = summoners[summoner_full_name].get("discordUserId")
+    if not user_id:
+        return False, f"{summoner_full_name} is not linked"
+
+    user_id = str(user_id)
+    for key in ["discordUserId", "discordDisplayName", "discordLinkedAt", "discordPrimary"]:
+        summoners[summoner_full_name].pop(key, None)
+
+    link = json_data.get("discordLinks", {}).get(user_id)
+    if link:
+        link["summoners"] = [summoner for summoner in link.get("summoners", []) if summoner != summoner_full_name]
+        if link.get("primarySummoner") == summoner_full_name:
+            link["primarySummoner"] = link["summoners"][0] if link["summoners"] else None
+            if link["primarySummoner"] in summoners:
+                summoners[link["primarySummoner"]]["discordPrimary"] = True
+        if not link["summoners"]:
+            del json_data["discordLinks"][user_id]
+
+    return True, f"{summoner_full_name} unlinked from <@{user_id}>"
+
+
+def set_primary_summoner_for_user(json_data, user, summoner_full_name):
+    rebuild_discord_links_from_summoners(json_data)
+    summoners = json_data.get("summoners") or {}
+    user_id = str(user.id)
+    link = json_data.get("discordLinks", {}).get(user_id)
+    if not link or summoner_full_name not in link.get("summoners", []):
+        return False, f"{summoner_full_name} is not linked to <@{user_id}>"
+
+    for linked_summoner in link["summoners"]:
+        if linked_summoner in summoners:
+            summoners[linked_summoner]["discordPrimary"] = linked_summoner == summoner_full_name
+    link["displayName"] = user.display_name
+    link["primarySummoner"] = summoner_full_name
+    return True, f"{summoner_full_name} set as primary for <@{user_id}>"
+
+
+def primary_summoner_queue_data(json_data, user_id):
+    summoner_name = primary_summoner_for_user(json_data, user_id)
+    if not summoner_name:
+        return {}
+
+    summoner_data = (json_data.get("summoners") or {}).get(summoner_name, {})
+    return {
+        "summonerFullName": summoner_name,
+        "puuid": summoner_data.get("puuid"),
+        "platform": summoner_data.get("platform"),
+        "region": summoner_data.get("region"),
+        "score": summoner_data.get("score", 0)
+    }
+
+
+def format_linked_accounts_summary(json_data):
+    rebuild_discord_links_from_summoners(json_data)
+    links = json_data.get("discordLinks", {})
+    if not links:
+        return "No linked accounts configured."
+
+    lines = []
+    for user_id, link in [item for item in links.items()][:10]:
+        primary = link.get("primarySummoner") or "-"
+        count = len(link.get("summoners", []))
+        lines.append(f"<@{user_id}> - {count} account(s), primary: **{primary}**")
+    if len(links) > 10:
+        lines.append(f"...and {len(links) - 10} more.")
+    return "\n".join(lines)
+
+
 def format_summoner_summary(json_data):
     summoners = [summoner for summoner in (json_data.get("summoners") or {}).keys()]
     if not summoners:
@@ -325,7 +495,8 @@ def format_matchmaking_queue(json_data):
     players = []
     for index, player in enumerate(queue, start=1):
         voice = f"<#{player['voiceChannelId']}>" if player.get("voiceChannelId") else "No voice channel"
-        players.append(f"**{index}.** <@{player['userId']}> - {voice}")
+        summoner = player.get("summonerFullName") or "Unlinked"
+        players.append(f"**{index}.** <@{player['userId']}> - {summoner} - {voice}")
     return "\n".join(players)
 
 
@@ -384,7 +555,8 @@ def matchmaking_embed(json_data):
         for index, player in enumerate(queue, start=1):
             user = f"<@{player['userId']}>"
             voice = f"<#{player['voiceChannelId']}>" if player.get("voiceChannelId") else "No voice channel"
-            players.append(f"**{index}.** {user} - {voice}")
+            summoner = player.get("summonerFullName") or "Unlinked"
+            players.append(f"**{index}.** {user} - {summoner} - {voice}")
         embed.add_field(name="Current players", value="\n".join(players), inline=False)
     else:
         embed.add_field(name="Current players", value="No players in queue.", inline=False)
@@ -400,8 +572,10 @@ def matchmaking_embed(json_data):
 
 def admin_embed(json_data):
     ensure_admin_state(json_data)
+    rebuild_discord_links_from_summoners(json_data)
     summoners = json_data.get("summoners") or {}
     queue = json_data.get("matchmakingQueue", [])
+    linked_accounts = json_data.get("discordLinks", {})
     leaderboard_channel = leaderboard_channel_id(json_data)
     matchmaking_channel = matchmaking_channel_id(json_data)
     admin_channel = admin_channel_id(json_data)
@@ -416,6 +590,7 @@ def admin_embed(json_data):
     embed.add_field(name="Matchmaking channel", value=f"<#{matchmaking_channel}>", inline=True)
     embed.add_field(name="Admin channel", value=f"<#{admin_channel}>", inline=True)
     embed.add_field(name="Leaderboard users", value=str(len(summoners)), inline=True)
+    embed.add_field(name="Linked Discord users", value=str(len(linked_accounts)), inline=True)
     embed.add_field(name="Matchmaking queue", value=f"{len(queue)}/10", inline=True)
     embed.add_field(name="Separate channels", value=f"{'On' if effective_matchmaking_separate_channels(json_data) else 'Off'} ({forced_mode_text(json_data)})", inline=True)
     embed.add_field(name="Leaderboard status", value=json_data.get("leaderboardLastUpdateStatus") or "Unknown", inline=True)
@@ -544,6 +719,7 @@ def remove_summoner_from_data(name, tagline):
         return False, f"{name}#{normalize_tagline(tagline)} has not been added"
 
     del json_data["summoners"][summoner_key]
+    rebuild_discord_links_from_summoners(json_data)
     writeToJsonFile(jsonFile, json_data)
     return True, f"{summoner_key} removed"
 
@@ -709,16 +885,19 @@ class MatchmakingView(disnake.ui.View):
         if index is not None:
             queue[index]["displayName"] = member.display_name
             queue[index]["voiceChannelId"] = voice_channel.id
+            queue[index].update(primary_summoner_queue_data(json_data, member.id))
             response = "Your voice channel was updated."
         else:
             if len(queue) >= 10:
                 await inter.followup.send("The matchmaking queue is full.", ephemeral=True)
                 return
-            queue.append({
+            player = {
                 "userId": member.id,
                 "displayName": member.display_name,
                 "voiceChannelId": voice_channel.id
-            })
+            }
+            player.update(primary_summoner_queue_data(json_data, member.id))
+            queue.append(player)
             response = "You joined the matchmaking queue."
 
         writeToJsonFile(jsonFile, json_data)
@@ -810,6 +989,108 @@ class AddSummonerModal(disnake.ui.Modal):
         success, message = await add_summoner_to_data(name, tagline, platform, region)
         log_event("leaderboard_summoner_add", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"name": name, "tagline": tagline, "platform": platform, "region": region})
         await refresh_configured_admin_message()
+        await inter.followup.send(message, ephemeral=True)
+
+
+class LinkAccountModal(disnake.ui.Modal):
+    def __init__(self):
+        components = [
+            disnake.ui.TextInput(label="Discord user ID or mention", custom_id="discord_user", required=True, max_length=32),
+            disnake.ui.TextInput(label="Summoner name", custom_id="name", required=True, max_length=32),
+            disnake.ui.TextInput(label="Tagline", custom_id="tagline", required=True, max_length=16),
+            disnake.ui.TextInput(label="Primary (yes/no)", custom_id="primary", required=False, max_length=8, placeholder="yes"),
+        ]
+        super().__init__(title="Link Discord account", custom_id="admin:link_account_modal", components=components)
+
+    async def callback(self, inter: disnake.ModalInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        await inter.response.defer(ephemeral=True)
+        member = await discord_user_from_text(inter.guild, inter.text_values["discord_user"])
+        if not member:
+            message = "Invalid Discord user."
+            log_event("discord_link_created", actor=interaction_actor(inter), status="error", summary=message)
+            await inter.followup.send(message, ephemeral=True)
+            return
+
+        json_data = ensure_admin_state(load_json_data())
+        summoner = find_summoner_key(json_data, inter.text_values["name"].strip(), inter.text_values["tagline"].strip())
+        if not summoner:
+            message = f"{inter.text_values['name']}#{normalize_tagline(inter.text_values['tagline'])} has not been added"
+            log_event("discord_link_created", actor=interaction_actor(inter), status="error", summary=message, details={"discordUserId": str(member.id)})
+            await inter.followup.send(message, ephemeral=True)
+            return
+
+        primary_value = inter.text_values.get("primary", "").strip().lower()
+        primary = primary_value not in ["no", "false", "0", "n"]
+        success, message = link_summoner_to_discord(json_data, member, summoner, primary)
+        writeToJsonFile(jsonFile, json_data)
+        log_event("discord_link_created", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"discordUserId": str(member.id), "summoner": summoner, "primary": primary})
+        await refresh_configured_admin_message(json_data)
+        await inter.followup.send(message, ephemeral=True)
+
+
+class UnlinkAccountModal(disnake.ui.Modal):
+    def __init__(self):
+        components = [
+            disnake.ui.TextInput(label="Summoner name", custom_id="name", required=True, max_length=32),
+            disnake.ui.TextInput(label="Tagline", custom_id="tagline", required=True, max_length=16),
+        ]
+        super().__init__(title="Unlink Discord account", custom_id="admin:unlink_account_modal", components=components)
+
+    async def callback(self, inter: disnake.ModalInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        json_data = ensure_admin_state(load_json_data())
+        summoner = find_summoner_key(json_data, inter.text_values["name"].strip(), inter.text_values["tagline"].strip())
+        if not summoner:
+            message = f"{inter.text_values['name']}#{normalize_tagline(inter.text_values['tagline'])} has not been added"
+            log_event("discord_link_removed", actor=interaction_actor(inter), status="error", summary=message)
+            await inter.response.send_message(message, ephemeral=True)
+            return
+
+        success, message = unlink_summoner_from_discord(json_data, summoner)
+        writeToJsonFile(jsonFile, json_data)
+        log_event("discord_link_removed", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"summoner": summoner})
+        await refresh_configured_admin_message(json_data)
+        await inter.response.send_message(message, ephemeral=True)
+
+
+class SetPrimaryAccountModal(disnake.ui.Modal):
+    def __init__(self):
+        components = [
+            disnake.ui.TextInput(label="Discord user ID or mention", custom_id="discord_user", required=True, max_length=32),
+            disnake.ui.TextInput(label="Summoner name", custom_id="name", required=True, max_length=32),
+            disnake.ui.TextInput(label="Tagline", custom_id="tagline", required=True, max_length=16),
+        ]
+        super().__init__(title="Set primary summoner", custom_id="admin:primary_account_modal", components=components)
+
+    async def callback(self, inter: disnake.ModalInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        await inter.response.defer(ephemeral=True)
+        member = await discord_user_from_text(inter.guild, inter.text_values["discord_user"])
+        if not member:
+            message = "Invalid Discord user."
+            log_event("discord_link_primary_changed", actor=interaction_actor(inter), status="error", summary=message)
+            await inter.followup.send(message, ephemeral=True)
+            return
+
+        json_data = ensure_admin_state(load_json_data())
+        summoner = find_summoner_key(json_data, inter.text_values["name"].strip(), inter.text_values["tagline"].strip())
+        if not summoner:
+            message = f"{inter.text_values['name']}#{normalize_tagline(inter.text_values['tagline'])} has not been added"
+            log_event("discord_link_primary_changed", actor=interaction_actor(inter), status="error", summary=message, details={"discordUserId": str(member.id)})
+            await inter.followup.send(message, ephemeral=True)
+            return
+
+        success, message = set_primary_summoner_for_user(json_data, member, summoner)
+        writeToJsonFile(jsonFile, json_data)
+        log_event("discord_link_primary_changed", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"discordUserId": str(member.id), "summoner": summoner})
+        await refresh_configured_admin_message(json_data)
         await inter.followup.send(message, ephemeral=True)
 
 
@@ -922,6 +1203,29 @@ class LeaderboardUsersAdminView(disnake.ui.View):
         await inter.response.send_modal(AddSummonerModal())
 
 
+class LinkedAccountsAdminView(disnake.ui.View):
+    def __init__(self):
+        super().__init__(timeout=300)
+
+    @disnake.ui.button(label="Link account", style=disnake.ButtonStyle.green, custom_id="admin:links:link")
+    async def link_account(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+        await inter.response.send_modal(LinkAccountModal())
+
+    @disnake.ui.button(label="Unlink account", style=disnake.ButtonStyle.red, custom_id="admin:links:unlink")
+    async def unlink_account(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+        await inter.response.send_modal(UnlinkAccountModal())
+
+    @disnake.ui.button(label="Set primary", style=disnake.ButtonStyle.blurple, custom_id="admin:links:primary")
+    async def set_primary(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+        await inter.response.send_modal(SetPrimaryAccountModal())
+
+
 class MatchmakingAdminView(disnake.ui.View):
     def __init__(self, json_data):
         super().__init__(timeout=300)
@@ -1018,6 +1322,16 @@ class AdminView(disnake.ui.View):
         json_data = load_json_data()
         await inter.response.send_message(embed=leaderboard_users_admin_embed(json_data), view=LeaderboardUsersAdminView(json_data), ephemeral=True)
 
+    @disnake.ui.button(label="Linked accounts", style=disnake.ButtonStyle.green, custom_id="admin:links", row=1)
+    async def linked_accounts(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        json_data = ensure_admin_state(load_json_data())
+        rebuild_discord_links_from_summoners(json_data)
+        writeToJsonFile(jsonFile, json_data)
+        await inter.response.send_message(embed=linked_accounts_admin_embed(json_data), view=LinkedAccountsAdminView(), ephemeral=True)
+
     @disnake.ui.button(label="Matchmaking", style=disnake.ButtonStyle.gray, custom_id="admin:matchmaking")
     async def matchmaking(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
         if not await require_admin_interaction(inter):
@@ -1066,6 +1380,23 @@ def leaderboard_users_admin_embed(json_data):
     embed.add_field(name="Current users", value=format_summoner_summary(json_data), inline=False)
     if len(summoners) > MAX_SELECT_OPTIONS:
         embed.set_footer(text=f"Only the first {MAX_SELECT_OPTIONS} users are available in the remove selector.")
+    return embed
+
+
+def linked_accounts_admin_embed(json_data):
+    rebuild_discord_links_from_summoners(json_data)
+    links = json_data.get("discordLinks", {})
+    linked_summoners = [
+        summoner for summoner, data in (json_data.get("summoners") or {}).items()
+        if data.get("discordUserId")
+    ]
+
+    embed = disnake.Embed(
+        title="Linked accounts",
+        description=f"Linked Discord users: **{len(links)}**\nLinked summoners: **{len(linked_summoners)}**",
+        colour=disnake.Colour.green()
+    )
+    embed.add_field(name="Current links", value=format_linked_accounts_summary(json_data), inline=False)
     return embed
 
 
@@ -1446,6 +1777,69 @@ if __name__ == "__main__":
             return
 
         message = await configure_matchmaking_channel(channel, interaction_actor(inter))
+        await inter.send(message, ephemeral=True)
+
+
+    @bot.slash_command(description="Link a leaderboard summoner to a Discord user")
+    async def linkdiscord(inter: ApplicationCommandInteraction, user: disnake.Member, name: str, tagline: str, primary: bool = True):
+        await inter.response.defer(ephemeral=True)
+        if not await require_admin_interaction(inter):
+            return
+
+        json_data = ensure_admin_state(load_json_data())
+        summoner = find_summoner_key(json_data, name, tagline)
+        if not summoner:
+            message = f"{name}#{normalize_tagline(tagline)} has not been added"
+            log_event("discord_link_created", actor=interaction_actor(inter), status="error", summary=message, details={"discordUserId": str(user.id)})
+            await inter.send(message, ephemeral=True)
+            return
+
+        success, message = link_summoner_to_discord(json_data, user, summoner, primary)
+        writeToJsonFile(jsonFile, json_data)
+        log_event("discord_link_created", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"discordUserId": str(user.id), "summoner": summoner, "primary": primary})
+        await refresh_configured_admin_message(json_data)
+        await inter.send(message, ephemeral=True)
+
+
+    @bot.slash_command(description="Unlink a leaderboard summoner from Discord")
+    async def unlinkdiscord(inter: ApplicationCommandInteraction, name: str, tagline: str):
+        await inter.response.defer(ephemeral=True)
+        if not await require_admin_interaction(inter):
+            return
+
+        json_data = ensure_admin_state(load_json_data())
+        summoner = find_summoner_key(json_data, name, tagline)
+        if not summoner:
+            message = f"{name}#{normalize_tagline(tagline)} has not been added"
+            log_event("discord_link_removed", actor=interaction_actor(inter), status="error", summary=message)
+            await inter.send(message, ephemeral=True)
+            return
+
+        success, message = unlink_summoner_from_discord(json_data, summoner)
+        writeToJsonFile(jsonFile, json_data)
+        log_event("discord_link_removed", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"summoner": summoner})
+        await refresh_configured_admin_message(json_data)
+        await inter.send(message, ephemeral=True)
+
+
+    @bot.slash_command(description="Set the primary summoner for a linked Discord user")
+    async def primarydiscord(inter: ApplicationCommandInteraction, user: disnake.Member, name: str, tagline: str):
+        await inter.response.defer(ephemeral=True)
+        if not await require_admin_interaction(inter):
+            return
+
+        json_data = ensure_admin_state(load_json_data())
+        summoner = find_summoner_key(json_data, name, tagline)
+        if not summoner:
+            message = f"{name}#{normalize_tagline(tagline)} has not been added"
+            log_event("discord_link_primary_changed", actor=interaction_actor(inter), status="error", summary=message, details={"discordUserId": str(user.id)})
+            await inter.send(message, ephemeral=True)
+            return
+
+        success, message = set_primary_summoner_for_user(json_data, user, summoner)
+        writeToJsonFile(jsonFile, json_data)
+        log_event("discord_link_primary_changed", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"discordUserId": str(user.id), "summoner": summoner})
+        await refresh_configured_admin_message(json_data)
         await inter.send(message, ephemeral=True)
 
 
