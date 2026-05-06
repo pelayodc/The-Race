@@ -25,6 +25,22 @@ MATCHMAKING_TEAM_MODE_LABELS = {
     "captains": "Captains"
 }
 CAPTAIN_DRAFT_TIMEOUT_SECONDS = 90
+AUDIT_CATEGORY_LABELS = {
+    "admin": "Admin",
+    "matchmaking": "Matchmaking",
+    "riot": "Riot/API",
+    "leaderboard": "Leaderboard",
+    "links": "Linked accounts",
+    "operations": "Operations",
+}
+AUDIT_CATEGORY_PREFIXES = {
+    "admin": ["admin_", "leaderboard_channel_changed", "matchmaking_channel_changed"],
+    "matchmaking": ["matchmaking_"],
+    "riot": ["riot_", "leaderboard_update_skipped"],
+    "leaderboard": ["leaderboard_"],
+    "links": ["discord_link_"],
+    "operations": ["operations_"],
+}
 
 
 def rank_icon(tier):
@@ -790,6 +806,101 @@ def format_log_event(event):
     return f"`{timestamp}` **{event.get('event', 'event')}** [{status}] {actor}: {summary}"[:1000]
 
 
+def audit_event_category(event):
+    event_name = event.get("event", "")
+    for category, prefixes in AUDIT_CATEGORY_PREFIXES.items():
+        if any(event_name.startswith(prefix) for prefix in prefixes):
+            return category
+    return "other"
+
+
+def parse_audit_timestamp(event):
+    timestamp = event.get("timestamp")
+    if not timestamp:
+        return None
+    try:
+        return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def filter_audit_events(category=None, actor_query=None, since=None, limit=10):
+    events = read_audit_events()
+    if category:
+        events = [event for event in events if audit_event_category(event) == category]
+    if actor_query:
+        query = actor_query.lower()
+        events = [
+            event for event in events
+            if query in str(event.get("actorId", "")).lower()
+            or query in str(event.get("actorName", "")).lower()
+        ]
+    if since:
+        events = [
+            event for event in events
+            if (parse_audit_timestamp(event) or datetime.min.replace(tzinfo=timezone.utc)) >= since
+        ]
+    if limit:
+        return events[-limit:]
+    return events
+
+
+def audit_logs_embed(title="Audit logs", category=None, actor_query=None, limit=10):
+    events = filter_audit_events(category=category, actor_query=actor_query, limit=limit)
+    embed = disnake.Embed(
+        title=title,
+        colour=disnake.Colour.dark_teal(),
+        timestamp=datetime.now()
+    )
+    if category:
+        embed.add_field(name="Category", value=AUDIT_CATEGORY_LABELS.get(category, category), inline=True)
+    if actor_query:
+        embed.add_field(name="Actor filter", value=actor_query[:100], inline=True)
+    if not events:
+        embed.description = "No matching audit logs found."
+        return embed
+
+    value = "\n".join(format_log_event(event) for event in events)
+    embed.description = value[-4000:]
+    return embed
+
+
+def audit_summary_24h_embed():
+    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    events = filter_audit_events(since=since, limit=None)
+    error_events = [event for event in events if event.get("status") == "error"]
+    critical_events = [
+        event for event in events
+        if audit_event_category(event) in ["admin", "operations", "leaderboard", "matchmaking"]
+    ]
+    category_counts = {}
+    for event in events:
+        category = audit_event_category(event)
+        category_counts[category] = category_counts.get(category, 0) + 1
+
+    embed = disnake.Embed(
+        title="Audit summary - last 24h",
+        colour=disnake.Colour.dark_teal(),
+        timestamp=datetime.now()
+    )
+    embed.add_field(name="Total events", value=str(len(events)), inline=True)
+    embed.add_field(name="Errors", value=str(len(error_events)), inline=True)
+    embed.add_field(name="Critical/admin events", value=str(len(critical_events)), inline=True)
+
+    if category_counts:
+        category_lines = [
+            f"**{AUDIT_CATEGORY_LABELS.get(category, category.title())}:** {count}"
+            for category, count in sorted(category_counts.items(), key=lambda item: item[0])
+        ]
+        embed.add_field(name="By category", value="\n".join(category_lines)[:1024], inline=False)
+    else:
+        embed.add_field(name="By category", value="No audit events in the last 24h.", inline=False)
+
+    if error_events:
+        embed.add_field(name="Recent errors", value="\n".join(format_log_event(event) for event in error_events[-5:])[-1024:], inline=False)
+    return embed
+
+
 def matchmaking_embed(json_data):
     ensure_matchmaking_state(json_data)
     queue = json_data["matchmakingQueue"]
@@ -907,19 +1018,7 @@ def status_admin_embed(json_data):
 
 
 def recent_logs_embed(limit=10):
-    events = read_audit_events(limit=limit)
-    embed = disnake.Embed(
-        title="Recent audit logs",
-        colour=disnake.Colour.dark_teal(),
-        timestamp=datetime.now()
-    )
-    if not events:
-        embed.description = "No audit logs stored yet."
-        return embed
-
-    value = "\n".join(format_log_event(event) for event in events)
-    embed.description = value[-4000:]
-    return embed
+    return audit_logs_embed(title="Recent audit logs", limit=limit)
 
 
 def task_status(task):
@@ -1966,9 +2065,57 @@ class MatchmakingAdminView(disnake.ui.View):
         await inter.response.edit_message(embed=matchmaking_admin_embed(json_data), view=MatchmakingAdminView(json_data))
 
 
+class AuditActorSearchModal(disnake.ui.Modal):
+    def __init__(self):
+        components = [
+            disnake.ui.TextInput(
+                label="Actor ID or name",
+                custom_id="actor_query",
+                required=True,
+                max_length=100,
+                placeholder="Discord ID, display name, or system"
+            )
+        ]
+        super().__init__(title="Search audit logs by actor", custom_id="admin:audit:actor_search_modal", components=components)
+
+    async def callback(self, inter: disnake.ModalInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        actor_query = inter.text_values["actor_query"].strip()
+        log_event("operations_audit_actor_search", actor=interaction_actor(inter), status="success", summary=f"Audit actor search requested for {actor_query}.")
+        await inter.response.send_message(embed=audit_logs_embed(title="Audit logs by actor", actor_query=actor_query, limit=15), ephemeral=True)
+
+
+class AuditCategorySelect(disnake.ui.Select):
+    def __init__(self):
+        options = [
+            disnake.SelectOption(label=label, value=category)
+            for category, label in AUDIT_CATEGORY_LABELS.items()
+        ]
+        super().__init__(
+            placeholder="Filter audit logs by category",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="admin:audit:category",
+            row=3
+        )
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        category = self.values[0]
+        label = AUDIT_CATEGORY_LABELS.get(category, category)
+        log_event("operations_audit_category_filter", actor=interaction_actor(inter), status="success", summary=f"Audit category filter requested for {label}.")
+        await inter.response.send_message(embed=audit_logs_embed(title=f"{label} audit logs", category=category, limit=15), ephemeral=True)
+
+
 class StatusLogsAdminView(disnake.ui.View):
     def __init__(self):
         super().__init__(timeout=300)
+        self.add_item(AuditCategorySelect())
 
     @disnake.ui.button(label="Refresh status", style=disnake.ButtonStyle.blurple, custom_id="admin:status:refresh", row=0)
     async def refresh_status(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -2055,6 +2202,21 @@ class StatusLogsAdminView(disnake.ui.View):
             return
 
         await inter.response.send_message("Audit log file:", file=disnake.File(AUDIT_LOG_PATH), ephemeral=True)
+
+    @disnake.ui.button(label="Audit summary 24h", style=disnake.ButtonStyle.blurple, custom_id="admin:audit:summary_24h", row=4)
+    async def audit_summary_24h(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        log_event("operations_audit_summary_24h", actor=interaction_actor(inter), status="success", summary="Audit summary requested.")
+        await inter.response.send_message(embed=audit_summary_24h_embed(), ephemeral=True)
+
+    @disnake.ui.button(label="Search actor", style=disnake.ButtonStyle.gray, custom_id="admin:audit:actor_search", row=4)
+    async def search_audit_actor(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        await inter.response.send_modal(AuditActorSearchModal())
 
 
 class AdminView(disnake.ui.View):
