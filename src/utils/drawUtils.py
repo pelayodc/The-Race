@@ -180,6 +180,139 @@ def drawPill(draw, box, fill, outline=None, radius=18, width=1):
     draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=width)
 
 
+def drawLineChart(draw, points, colour, width=4):
+    if len(points) < 2:
+        return
+    draw.line(points, fill=colour, width=width, joint="curve")
+
+
+def timelineGoldSeries(matchData, timelineData):
+    participants = {
+        participant.get("participantId"): participant
+        for participant in matchData.get("info", {}).get("participants", [])
+    }
+    series = {
+        participantId: []
+        for participantId in participants
+        if participantId is not None
+    }
+
+    for frame in timelineData.get("info", {}).get("frames", []):
+        minute = int(frame.get("timestamp", 0) // 60000)
+        participantFrames = frame.get("participantFrames", {})
+        for participantId in series:
+            frameData = participantFrames.get(str(participantId)) or participantFrames.get(participantId)
+            if frameData:
+                series[participantId].append((minute, frameData.get("totalGold", 0)))
+
+    return participants, {participantId: values for participantId, values in series.items() if values}
+
+
+def generateGoldGraphImage(matchData, timelineData):
+    participants, series = timelineGoldSeries(matchData, timelineData)
+    if not series:
+        return None
+
+    canvasWidth = 1500
+    canvasHeight = 900
+    paddingLeft = 110
+    paddingRight = 360
+    paddingTop = 115
+    paddingBottom = 95
+    chartLeft = paddingLeft
+    chartTop = paddingTop
+    chartRight = canvasWidth - paddingRight
+    chartBottom = canvasHeight - paddingBottom
+
+    canvas = Image.new("RGBA", (canvasWidth, canvasHeight), (35, 37, 46, 255))
+    draw = ImageDraw.Draw(canvas)
+
+    fonts = {
+        "title": ImageFont.truetype(assetPath("ARIAL.TTF"), 42),
+        "subtitle": ImageFont.truetype(assetPath("ARIAL.TTF"), 23),
+        "axis": ImageFont.truetype(assetPath("ARIAL.TTF"), 18),
+        "legend": ImageFont.truetype(assetPath("ARIAL.TTF"), 19),
+        "small": ImageFont.truetype(assetPath("ARIAL.TTF"), 16),
+    }
+
+    info = matchData.get("info", {})
+    duration = formatTime(int(info.get("gameDuration", 0))) if info.get("gameDuration") else "-"
+    draw.text((34, 28), "Gold graph", fill=(248, 249, 252), font=fonts["title"])
+    draw.text((37, 78), f"Total gold by minute - {duration}", fill=(139, 146, 164), font=fonts["subtitle"])
+
+    maxMinute = max(minute for values in series.values() for minute, _ in values)
+    maxGold = max(gold for values in series.values() for _, gold in values)
+    maxMinute = max(1, maxMinute)
+    maxGold = max(1000, int(((maxGold + 999) // 1000) * 1000))
+
+    draw.rounded_rectangle((chartLeft - 18, chartTop - 18, chartRight + 18, chartBottom + 18), radius=22, fill=(31, 32, 40), outline=(57, 61, 74), width=2)
+
+    gridColour = (54, 58, 70)
+    labelColour = (166, 173, 190)
+    for step in range(0, 6):
+        y = chartBottom - ((chartBottom - chartTop) * step / 5)
+        gold = int(maxGold * step / 5)
+        draw.line((chartLeft, y, chartRight, y), fill=gridColour, width=1)
+        draw.text((24, y - 10), f"{round(gold / 1000, 1)}k", fill=labelColour, font=fonts["axis"])
+
+    xStep = 5 if maxMinute <= 35 else 10
+    for minute in range(0, maxMinute + 1, xStep):
+        x = chartLeft + ((chartRight - chartLeft) * minute / maxMinute)
+        draw.line((x, chartTop, x, chartBottom), fill=(45, 49, 60), width=1)
+        drawTextCentered(canvas, str(minute), x, chartBottom + 34, fonts["axis"], labelColour)
+
+    draw.text((chartLeft + 330, chartBottom + 58), "Minute", fill=labelColour, font=fonts["axis"])
+    draw.text((30, chartTop - 36), "Gold", fill=labelColour, font=fonts["axis"])
+
+    teamColours = {
+        100: [(88, 166, 255), (91, 206, 250), (80, 190, 140), (163, 221, 112), (212, 235, 130)],
+        200: [(255, 120, 120), (255, 161, 102), (232, 193, 91), (214, 133, 255), (184, 142, 255)],
+    }
+    teamIndexes = {100: 0, 200: 0}
+    lineColours = {}
+
+    sortedParticipants = sorted(
+        participants.values(),
+        key=lambda participant: (participant.get("teamId", 0), participant.get("participantId", 0))
+    )
+    for participant in sortedParticipants:
+        teamId = participant.get("teamId")
+        palette = teamColours.get(teamId, [(220, 225, 236)])
+        index = teamIndexes.get(teamId, 0)
+        lineColours[participant.get("participantId")] = palette[index % len(palette)]
+        teamIndexes[teamId] = index + 1
+
+    def chartPoint(minute, gold):
+        x = chartLeft + ((chartRight - chartLeft) * minute / maxMinute)
+        y = chartBottom - ((chartBottom - chartTop) * gold / maxGold)
+        return x, y
+
+    for participantId, values in series.items():
+        points = [chartPoint(minute, gold) for minute, gold in values]
+        drawLineChart(draw, points, lineColours.get(participantId, (220, 225, 236)))
+
+    legendX = chartRight + 52
+    legendY = chartTop - 8
+    for teamId, label in [(100, "Blue side"), (200, "Red side")]:
+        draw.text((legendX, legendY), label, fill=(248, 249, 252), font=fonts["subtitle"])
+        legendY += 36
+        for participant in [p for p in sortedParticipants if p.get("teamId") == teamId]:
+            participantId = participant.get("participantId")
+            colour = lineColours.get(participantId, (220, 225, 236))
+            name = participant.get("riotIdGameName") or participant.get("summonerName") or "Unknown"
+            champion = participant.get("championName", "Unknown")
+            text = truncateText(draw, f"{champion} - {name}", fonts["legend"], 275)
+            draw.rounded_rectangle((legendX, legendY + 4, legendX + 26, legendY + 16), radius=6, fill=colour)
+            draw.text((legendX + 38, legendY - 2), text, fill=(220, 225, 236), font=fonts["legend"])
+            legendY += 30
+        legendY += 24
+
+    buffer = BytesIO()
+    canvas.convert("RGB").save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer
+
+
 def drawSmallMvpBadge(canvas, x, y):
     draw = ImageDraw.Draw(canvas)
     badgeBox = (x, y, x + 46, y + 20)

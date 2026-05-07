@@ -11,7 +11,8 @@ from disnake import ApplicationCommandInteraction
 from disnake.ext import commands, tasks
 import requests
 from utils.commonUtils import requestLimit, jsonFile, dailyPostTimer, discordChannel, platforms, regions, riotApKey, discordToken
-from utils.dataUtils import checkForNewPatchNotes, numberOfSummoners, update, riotBackoffRemaining, riotBackoffTimestamp
+from utils.dataUtils import checkForNewPatchNotes, numberOfSummoners, update, riotBackoffRemaining, riotBackoffTimestamp, riot_get
+from utils.drawUtils import generateGoldGraphImage
 from utils.jsonUtils import openJsonFile, writeToJsonFile
 from utils.auditUtils import AUDIT_LOG_PATH, interaction_actor, log_event, read_audit_events, recent_error_events, system_actor
 
@@ -932,6 +933,407 @@ def personal_report_embed(json_data, member):
 
     embed.set_footer(text=f"Cache only. Last leaderboard update: {last_update} ({last_status})")
     return embed
+
+
+def compact_number(value):
+    if value is None:
+        return "-"
+    try:
+        return f"{int(value):,}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def percent_text(value):
+    if value is None:
+        return "-"
+    return f"{value * 100:.0f}%"
+
+
+def participant_name(participant):
+    game_name = participant.get("riotIdGameName") or participant.get("summonerName") or "Unknown"
+    tagline = participant.get("riotIdTagline")
+    if tagline:
+        return f"{game_name}#{tagline}"
+    return game_name
+
+
+def participant_position(participant):
+    return participant.get("teamPosition") or participant.get("individualPosition") or participant.get("lane") or "-"
+
+
+def participant_cs(participant):
+    return participant.get("totalMinionsKilled", 0) + participant.get("neutralMinionsKilled", 0)
+
+
+def participant_kda_ratio(participant):
+    kills = participant.get("kills", 0)
+    deaths = participant.get("deaths", 0)
+    assists = participant.get("assists", 0)
+    return (kills + assists) / max(1, deaths)
+
+
+def participant_stat_value(participant, stat):
+    challenges = participant.get("challenges", {}) or {}
+    if stat in challenges:
+        return challenges.get(stat)
+    return participant.get(stat)
+
+
+def match_mvp_participant_id(participants):
+    stat_names = ["killParticipation", "kda", "totalDamageDealtToChampions", "damageDealtToBuildings", "totalDamageTaken", "goldPerMinute", "visionScore"]
+    weights = {
+        "killParticipation": 1,
+        "kda": 1.2,
+        "totalDamageDealtToChampions": 1,
+        "damageDealtToBuildings": 0.7,
+        "totalDamageTaken": 0.7,
+        "goldPerMinute": 1,
+        "visionScore": 1,
+    }
+    means = {}
+    stds = {}
+    for stat in stat_names:
+        values = [participant_stat_value(participant, stat) for participant in participants]
+        values = [value for value in values if isinstance(value, (int, float))]
+        if not values:
+            means[stat] = None
+            stds[stat] = None
+            continue
+        mean = sum(values) / len(values)
+        variance = sum((value - mean) ** 2 for value in values) / len(values)
+        means[stat] = mean
+        stds[stat] = math.sqrt(variance)
+
+    best_participant_id = None
+    best_score = float("-inf")
+    for participant in participants:
+        score = 0
+        for stat in stat_names:
+            value = participant_stat_value(participant, stat)
+            mean = means.get(stat)
+            std = stds.get(stat)
+            if not isinstance(value, (int, float)) or mean is None or not std:
+                continue
+            score += ((value - mean) / std) * weights[stat]
+        if score > best_score:
+            best_score = score
+            best_participant_id = participant.get("participantId")
+    return best_participant_id
+
+
+def participant_badges(participant, leaders):
+    participant_id = participant.get("participantId")
+    badges = []
+    if participant_id == leaders.get("mvp"):
+        badges.append("MVP")
+    if participant_id == leaders.get("damage"):
+        badges.append("DMG")
+    if participant_id == leaders.get("gold"):
+        badges.append("GOLD")
+    if participant_id == leaders.get("vision"):
+        badges.append("VIS")
+    if participant_id == leaders.get("kda"):
+        badges.append("KDA")
+    return f" [{' '.join(badges)}]" if badges else ""
+
+
+def match_leaders(participants):
+    if not participants:
+        return {}
+    return {
+        "mvp": match_mvp_participant_id(participants),
+        "damage": max(participants, key=lambda p: p.get("totalDamageDealtToChampions", 0)).get("participantId"),
+        "gold": max(participants, key=lambda p: p.get("goldEarned", 0)).get("participantId"),
+        "vision": max(participants, key=lambda p: p.get("visionScore", 0)).get("participantId"),
+        "kda": max(participants, key=participant_kda_ratio).get("participantId"),
+    }
+
+
+def format_scoreboard_line(participant, leaders):
+    kda = f"{participant.get('kills', 0)}/{participant.get('deaths', 0)}/{participant.get('assists', 0)}"
+    kp = percent_text((participant.get("challenges", {}) or {}).get("killParticipation"))
+    name = participant_name(participant)
+    if len(name) > 22:
+        name = f"{name[:19]}..."
+    champion = participant.get("championName", "Unknown")
+    if len(champion) > 13:
+        champion = f"{champion[:10]}..."
+    return (
+        f"`{champion:<13}` **{name}** ({participant_position(participant)}) "
+        f"{kda} | {participant_cs(participant)} CS | {compact_number(participant.get('goldEarned'))}g | "
+        f"{format_compact_damage(participant.get('totalDamageDealtToChampions'))} dmg | "
+        f"{participant.get('visionScore', 0)} vis | KP {kp}{participant_badges(participant, leaders)}"
+    )
+
+
+def personal_match_summary(participant, duration_seconds):
+    minutes = max(1, duration_seconds / 60) if duration_seconds else 1
+    damage_per_minute = participant.get("totalDamageDealtToChampions", 0) / minutes
+    gold_per_minute = participant.get("goldEarned", 0) / minutes
+    cs_per_minute = participant_cs(participant) / minutes
+    vision_per_minute = participant.get("visionScore", 0) / minutes
+    kp = percent_text((participant.get("challenges", {}) or {}).get("killParticipation"))
+    return (
+        f"KP: **{kp}**\n"
+        f"Damage/min: **{damage_per_minute:.0f}**\n"
+        f"Gold/min: **{gold_per_minute:.0f}**\n"
+        f"CS/min: **{cs_per_minute:.1f}**\n"
+        f"Vision/min: **{vision_per_minute:.1f}**"
+    )
+
+
+def cached_personal_game_context(json_data, summoner_name, game_index):
+    games = cached_recent_games(json_data, summoner_name)
+    if game_index < 0 or game_index >= len(games):
+        return None, "That match is no longer available in the recent match cache."
+    game = games[game_index]
+    if not game.get("cached"):
+        return None, "That match is not cached yet."
+    match_data = (json_data.get("matchData") or {}).get(game.get("matchId"))
+    summoner_data = (json_data.get("summoners") or {}).get(summoner_name, {})
+    participant = cached_match_participant(match_data or {}, summoner_data.get("puuid"))
+    if not match_data or not participant:
+        return None, "That cached match does not contain this player's participant data."
+    return {
+        "games": games,
+        "game": game,
+        "match_data": match_data,
+        "participant": participant,
+        "summoner_data": summoner_data,
+    }, None
+
+
+def match_detail_embed(json_data, summoner_name, game_index):
+    context, error = cached_personal_game_context(json_data, summoner_name, game_index)
+    if error:
+        return None, error
+
+    game = context["game"]
+    match_data = context["match_data"]
+    participant = context["participant"]
+    info = match_data.get("info", {})
+    participants = info.get("participants", [])
+    leaders = match_leaders(participants)
+    result = "Remake" if game.get("remake") else "Victory" if participant.get("win") else "Defeat"
+    kda = f"{participant.get('kills', 0)}/{participant.get('deaths', 0)}/{participant.get('assists', 0)}"
+    duration = format_match_duration(info.get("gameDuration"))
+    match_id = game.get("matchId")
+
+    embed = disnake.Embed(
+        title=f"Game {game_index + 1}: {participant.get('championName', 'Unknown')} - {result}",
+        description=f"Match: `{match_id}`\nPlayer: **{summoner_name}**\nKDA: **{kda}** - Duration: **{duration}**",
+        colour=disnake.Colour.green() if participant.get("win") else disnake.Colour.red(),
+        timestamp=datetime.now()
+    )
+    embed.add_field(name="Personal performance", value=personal_match_summary(participant, info.get("gameDuration", 0)), inline=True)
+
+    timeline_cached = match_id in (json_data.get("matchTimelineData") or {})
+    embed.add_field(
+        name="Data freshness",
+        value=f"Match cached: **Yes**\nTimeline cached: **{'Yes' if timeline_cached else 'No'}**",
+        inline=True
+    )
+
+    for team_id, team_name in [(100, "Blue side"), (200, "Red side")]:
+        team_participants = [p for p in participants if p.get("teamId") == team_id]
+        lines = [format_scoreboard_line(p, leaders) for p in team_participants]
+        embed.add_field(name=team_name, value=("\n".join(lines) or "-")[:1024], inline=False)
+
+    embed.set_footer(text="Badges: MVP, top damage, top gold, top vision, best KDA.")
+    return embed, None
+
+
+def team_objective_text(team):
+    objectives = team.get("objectives", {}) or {}
+    return (
+        f"Towers {objectives.get('tower', {}).get('kills', 0)}, "
+        f"Dragons {objectives.get('dragon', {}).get('kills', 0)}, "
+        f"Herald {objectives.get('riftHerald', {}).get('kills', 0)}, "
+        f"Baron {objectives.get('baron', {}).get('kills', 0)}, "
+        f"Inhib {objectives.get('inhibitor', {}).get('kills', 0)}"
+    )
+
+
+def compare_teams_embed(json_data, summoner_name, game_index):
+    context, error = cached_personal_game_context(json_data, summoner_name, game_index)
+    if error:
+        return None, error
+
+    match_data = context["match_data"]
+    teams = {team.get("teamId"): team for team in match_data.get("info", {}).get("teams", [])}
+    participants = match_data.get("info", {}).get("participants", [])
+    embed = disnake.Embed(
+        title=f"Game {game_index + 1}: team comparison",
+        colour=disnake.Colour.blurple(),
+        timestamp=datetime.now()
+    )
+    for team_id, team_name in [(100, "Blue side"), (200, "Red side")]:
+        team_participants = [p for p in participants if p.get("teamId") == team_id]
+        kills = sum(p.get("kills", 0) for p in team_participants)
+        deaths = sum(p.get("deaths", 0) for p in team_participants)
+        assists = sum(p.get("assists", 0) for p in team_participants)
+        gold = sum(p.get("goldEarned", 0) for p in team_participants)
+        damage = sum(p.get("totalDamageDealtToChampions", 0) for p in team_participants)
+        vision = sum(p.get("visionScore", 0) for p in team_participants)
+        result = "Win" if (teams.get(team_id) or {}).get("win") else "Loss"
+        embed.add_field(
+            name=f"{team_name} - {result}",
+            value=(
+                f"KDA: **{kills}/{deaths}/{assists}**\n"
+                f"Gold: **{compact_number(gold)}**\n"
+                f"Damage: **{compact_number(damage)}**\n"
+                f"Vision: **{vision}**\n"
+                f"{team_objective_text(teams.get(team_id) or {})}"
+            ),
+            inline=True
+        )
+    embed.set_footer(text="Objective values are from cached Riot match data when available.")
+    return embed, None
+
+
+def personal_report_view(json_data, summoner_name):
+    games = cached_recent_games(json_data, summoner_name)
+    cached_games = [game for game in games if game.get("cached")]
+    if not cached_games:
+        return None
+    return PersonalReportView(summoner_name, games)
+
+
+async def fetch_match_timeline(json_data, summoner_name, match_id):
+    json_data.setdefault("matchTimelineData", {})
+    if match_id in json_data["matchTimelineData"]:
+        return True, json_data["matchTimelineData"][match_id], "Timeline cached."
+
+    summoner_data = (json_data.get("summoners") or {}).get(summoner_name, {})
+    region = summoner_data.get("region")
+    if not region:
+        return False, None, "This summoner does not have a Riot region configured."
+    if not riotApKey:
+        return False, None, "RIOT_API_KEY is not configured."
+
+    ok, timeline_data, retry_after = riot_get(
+        f"https://{region}.api.riotgames.com/lol/match/v5/matches/{match_id}/timeline?api_key={riotApKey}",
+        f"match timeline {match_id}"
+    )
+    if not ok or not timeline_data:
+        if retry_after:
+            return False, None, f"Riot is rate limiting requests. Try again in {round(retry_after)} seconds."
+        return False, None, "The Riot timeline request failed."
+
+    latest_json_data = ensure_admin_state(load_json_data())
+    latest_json_data.setdefault("matchTimelineData", {})
+    latest_json_data["matchTimelineData"][match_id] = timeline_data
+    writeToJsonFile(jsonFile, latest_json_data)
+    return True, timeline_data, "Timeline fetched now."
+
+
+class PersonalMatchButton(disnake.ui.Button):
+    def __init__(self, summoner_name, game, index):
+        label = f"Game {index + 1}"
+        if game.get("cached"):
+            label = f"{label}: {game.get('champion', 'Unknown')}"
+        super().__init__(
+            label=label[:80],
+            style=disnake.ButtonStyle.gray,
+            row=index // 3,
+            disabled=not game.get("cached")
+        )
+        self.summoner_name = summoner_name
+        self.game_index = index
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        json_data = ensure_admin_state(load_json_data())
+        embed, error = match_detail_embed(json_data, self.summoner_name, self.game_index)
+        if error:
+            await inter.response.send_message(error, ephemeral=True)
+            return
+        await inter.response.send_message(embed=embed, view=MatchDetailView(self.summoner_name, self.game_index), ephemeral=True)
+
+
+class PersonalReportView(disnake.ui.View):
+    def __init__(self, summoner_name, games):
+        super().__init__(timeout=180)
+        for index, game in enumerate(games[:5]):
+            if game.get("cached"):
+                self.add_item(PersonalMatchButton(summoner_name, game, index))
+
+
+class GoldGraphButton(disnake.ui.Button):
+    def __init__(self, summoner_name, game_index):
+        super().__init__(label="Gold graph", style=disnake.ButtonStyle.green, row=0)
+        self.summoner_name = summoner_name
+        self.game_index = game_index
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        await inter.response.defer(ephemeral=True)
+        json_data = ensure_admin_state(load_json_data())
+        context, error = cached_personal_game_context(json_data, self.summoner_name, self.game_index)
+        if error:
+            await inter.followup.send(error, ephemeral=True)
+            return
+
+        match_id = context["game"]["matchId"]
+        ok, timeline_data, status = await fetch_match_timeline(json_data, self.summoner_name, match_id)
+        if not ok:
+            await inter.followup.send(status, ephemeral=True)
+            return
+
+        image_buffer = generateGoldGraphImage(context["match_data"], timeline_data)
+        if not image_buffer:
+            await inter.followup.send("No timeline gold data was available for this match.", ephemeral=True)
+            return
+
+        file = disnake.File(image_buffer, filename=f"{match_id}-gold.png")
+        await inter.followup.send(content=status, file=file, ephemeral=True)
+
+
+class CompareTeamsButton(disnake.ui.Button):
+    def __init__(self, summoner_name, game_index):
+        super().__init__(label="Compare teams", style=disnake.ButtonStyle.blurple, row=0)
+        self.summoner_name = summoner_name
+        self.game_index = game_index
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        json_data = ensure_admin_state(load_json_data())
+        embed, error = compare_teams_embed(json_data, self.summoner_name, self.game_index)
+        if error:
+            await inter.response.send_message(error, ephemeral=True)
+            return
+        await inter.response.edit_message(embed=embed, view=MatchDetailView(self.summoner_name, self.game_index))
+
+
+class MatchNavigationButton(disnake.ui.Button):
+    def __init__(self, summoner_name, game_index, direction, disabled):
+        label = "Prev match" if direction < 0 else "Next match"
+        super().__init__(label=label, style=disnake.ButtonStyle.gray, row=1, disabled=disabled)
+        self.summoner_name = summoner_name
+        self.game_index = game_index
+        self.direction = direction
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        next_index = self.game_index + self.direction
+        json_data = ensure_admin_state(load_json_data())
+        embed, error = match_detail_embed(json_data, self.summoner_name, next_index)
+        if error:
+            await inter.response.send_message(error, ephemeral=True)
+            return
+        await inter.response.edit_message(embed=embed, view=MatchDetailView(self.summoner_name, next_index))
+
+
+class MatchDetailView(disnake.ui.View):
+    def __init__(self, summoner_name, game_index):
+        super().__init__(timeout=180)
+        json_data = ensure_admin_state(load_json_data())
+        games = cached_recent_games(json_data, summoner_name)
+        previous_index = game_index - 1
+        next_index = game_index + 1
+        previous_disabled = previous_index < 0 or previous_index >= len(games) or not games[previous_index].get("cached")
+        next_disabled = next_index < 0 or next_index >= len(games) or not games[next_index].get("cached")
+        self.add_item(GoldGraphButton(summoner_name, game_index))
+        self.add_item(CompareTeamsButton(summoner_name, game_index))
+        self.add_item(MatchNavigationButton(summoner_name, game_index, -1, previous_disabled))
+        self.add_item(MatchNavigationButton(summoner_name, game_index, 1, next_disabled))
 
 
 def format_linked_accounts_summary(json_data):
@@ -2867,7 +3269,9 @@ if __name__ == "__main__":
             return
 
         log_event("personal_report_view", actor=interaction_actor(inter), status="success", summary=f"Cached personal report viewed for {target.display_name}.", details={"targetUserId": str(target.id)})
-        await inter.send(embed=embed, ephemeral=private)
+        summoner_name = primary_summoner_for_user(json_data, target.id)
+        view = personal_report_view(json_data, summoner_name) if summoner_name else None
+        await inter.send(embed=embed, view=view, ephemeral=private)
 
 
     @bot.slash_command(description="Patch notes")

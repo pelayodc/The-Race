@@ -397,6 +397,8 @@ def fetchAllSummonerData(force, daily):
         # Now delete the keys outside of the loop
         for matchId in keysToDelete:
             del jsonData["matchData"][matchId]
+            if "matchTimelineData" in jsonData:
+                jsonData["matchTimelineData"].pop(matchId, None)
 
         # Save the updated data back to the JSON file
         writeToJsonFile(jsonFile, jsonData)
