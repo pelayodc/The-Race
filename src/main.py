@@ -25,6 +25,11 @@ MATCHMAKING_TEAM_MODE_LABELS = {
     "balanced_rank": "Balanced rank",
     "captains": "Captains"
 }
+MATCHMAKING_ODD_PLAYER_POLICIES = ["allow_uneven", "require_even"]
+MATCHMAKING_ODD_PLAYER_POLICY_LABELS = {
+    "allow_uneven": "Allow uneven teams",
+    "require_even": "Require even teams"
+}
 CAPTAIN_DRAFT_TIMEOUT_SECONDS = 90
 AUDIT_CATEGORY_LABELS = {
     "admin": "Admin",
@@ -271,6 +276,8 @@ def ensure_matchmaking_state(json_data):
     json_data.setdefault("matchmakingSeparateChannelsForced", None)
     json_data.setdefault("matchmakingTeamChannelIds", [])
     json_data.setdefault("matchmakingInProgress", False)
+    if json_data.get("matchmakingOddPlayersPolicy") not in MATCHMAKING_ODD_PLAYER_POLICIES:
+        json_data["matchmakingOddPlayersPolicy"] = "allow_uneven"
     if json_data.get("matchmakingTeamMode") not in MATCHMAKING_TEAM_MODES:
         json_data["matchmakingTeamMode"] = "random"
     if json_data.get("matchmakingTeamModeForced") not in MATCHMAKING_TEAM_MODES:
@@ -306,9 +313,9 @@ def effective_matchmaking_separate_channels(json_data):
 def forced_mode_text(json_data):
     forced_mode = json_data.get("matchmakingSeparateChannelsForced")
     if forced_mode is True:
-        return "Forced on"
+        return "Forced separate channels"
     if forced_mode is False:
-        return "Forced off"
+        return "Forced same channel"
     return "Unlocked"
 
 
@@ -329,6 +336,19 @@ def team_mode_lock_text(json_data):
     if forced_mode in MATCHMAKING_TEAM_MODES:
         return f"Forced {team_mode_label(forced_mode)}"
     return "Unlocked"
+
+
+def odd_players_policy_label(policy):
+    return MATCHMAKING_ODD_PLAYER_POLICY_LABELS.get(policy, "Allow uneven teams")
+
+
+def effective_odd_players_policy(json_data):
+    policy = json_data.get("matchmakingOddPlayersPolicy")
+    return policy if policy in MATCHMAKING_ODD_PLAYER_POLICIES else "allow_uneven"
+
+
+def voice_mode_label(separate_channels):
+    return "Separate team channels" if separate_channels else "Same channel"
 
 
 def user_queue_index(queue, user_id):
@@ -363,18 +383,41 @@ def player_score(player, neutral_score=0):
         return neutral_score
 
 
+def player_valid_score(player):
+    if player.get("tier") is None or player.get("rank") is None or player.get("leaguePoints") is None:
+        return None
+    score = player.get("score")
+    if score is None:
+        return None
+    try:
+        return int(score)
+    except (TypeError, ValueError):
+        return None
+
+
+def valid_player_scores(players):
+    return [score for score in (player_valid_score(player) for player in players) if score is not None]
+
+
+def has_valid_player_scores(players):
+    return bool(valid_player_scores(players))
+
+
 def neutral_unlinked_score(players):
-    linked_scores = [player_score(player, 0) for player in players if player.get("summonerFullName")]
-    if not linked_scores:
+    scores = valid_player_scores(players)
+    if not scores:
         return 0
-    return round(sum(linked_scores) / len(linked_scores))
+    return round(sum(scores) / len(scores))
 
 
 def matchmaking_player_label(player, include_score=False, neutral_score=0):
     summoner = player.get("summonerFullName") or "Unlinked"
     label = f"<@{player['userId']}> - {summoner}"
     if include_score:
-        label += f" ({player_score(player, neutral_score)})"
+        score = player_valid_score(player)
+        if score is None and neutral_score:
+            score = neutral_score
+        label += f" ({score if score is not None else '-'})"
     return label
 
 
@@ -386,13 +429,6 @@ def format_team(players, neutral_score=0):
 
 def players_by_id(players):
     return {player_id(player): player for player in players}
-
-
-def next_team_mode(current_mode):
-    if current_mode not in MATCHMAKING_TEAM_MODES:
-        return "random"
-    index = MATCHMAKING_TEAM_MODES.index(current_mode)
-    return MATCHMAKING_TEAM_MODES[(index + 1) % len(MATCHMAKING_TEAM_MODES)]
 
 
 def balanced_rank_teams(players):
@@ -1516,14 +1552,25 @@ def matchmaking_embed(json_data):
     team_mode = effective_matchmaking_team_mode(json_data)
     team_mode_text = team_mode_label(team_mode)
     team_mode_lock = team_mode_lock_text(json_data)
+    odd_policy = effective_odd_players_policy(json_data)
     draft = json_data.get("matchmakingDraft")
     ready_text = "Ready to start" if len(queue) >= 2 else "Waiting for at least 2 players"
     if draft:
         ready_text = "Captain draft in progress"
+    fallback_text = ""
+    if queue and team_mode == "balanced_rank" and not has_valid_player_scores(queue):
+        fallback_text = "\nBalance fallback: **random teams** (no valid scores cached)"
 
     embed = disnake.Embed(
         title="Matchmaking",
-        description=f"{ready_text}\nPlayers: **{len(queue)}/10**\nTeam mode: **{team_mode_text}** ({team_mode_lock})\nSeparate channels: **{'On' if separate_channels else 'Off'}** ({separate_mode_text})",
+        description=(
+            f"{ready_text}\n"
+            f"Players: **{len(queue)}/10**\n"
+            f"Team mode: **{team_mode_text}** ({team_mode_lock})\n"
+            f"Voice: **{voice_mode_label(separate_channels)}** ({separate_mode_text})\n"
+            f"Odd players: **{odd_players_policy_label(odd_policy)}**"
+            f"{fallback_text}"
+        ),
         colour=disnake.Colour.blurple(),
         timestamp=datetime.now()
     )
@@ -1551,7 +1598,7 @@ def matchmaking_embed(json_data):
 
     embed.add_field(
         name="Controls",
-        value="Use the buttons below to join, leave, change team mode, toggle separate voice channels, or start the match.",
+        value="Use the buttons below to join, leave, open private settings, pick during captain draft, or start the match.",
         inline=False
     )
     embed.set_footer(text="Join requires being in a voice channel.")
@@ -1580,8 +1627,9 @@ def admin_embed(json_data):
     embed.add_field(name="Leaderboard users", value=str(len(summoners)), inline=True)
     embed.add_field(name="Linked Discord users", value=str(len(linked_accounts)), inline=True)
     embed.add_field(name="Matchmaking queue", value=f"{len(queue)}/10", inline=True)
-    embed.add_field(name="Separate channels", value=f"{'On' if effective_matchmaking_separate_channels(json_data) else 'Off'} ({forced_mode_text(json_data)})", inline=True)
+    embed.add_field(name="Voice mode", value=f"{voice_mode_label(effective_matchmaking_separate_channels(json_data))} ({forced_mode_text(json_data)})", inline=True)
     embed.add_field(name="Team mode", value=f"{team_mode_label(effective_matchmaking_team_mode(json_data))} ({team_mode_lock_text(json_data)})", inline=True)
+    embed.add_field(name="Odd players", value=odd_players_policy_label(effective_odd_players_policy(json_data)), inline=True)
     embed.add_field(name="Leaderboard chat commands", value="Enabled" if leaderboard_chat_commands_enabled(json_data) else "Disabled", inline=True)
     embed.add_field(name="Leaderboard status", value=json_data.get("leaderboardLastUpdateStatus") or "Unknown", inline=True)
     embed.set_footer(text="Administration actions require Manage Server.")
@@ -1995,7 +2043,7 @@ async def active_matchmaking_queue(guild, json_data):
     return active_queue
 
 
-async def finish_matchmaking_teams(guild, json_data, team_one, team_two, mode):
+async def finish_matchmaking_teams(guild, json_data, team_one, team_two, mode, note=None):
     json_data["matchmakingInProgress"] = True
     writeToJsonFile(jsonFile, json_data)
     created_channels = []
@@ -2056,15 +2104,18 @@ async def finish_matchmaking_teams(guild, json_data, team_one, team_two, mode):
     writeToJsonFile(jsonFile, json_data)
 
     neutral_score = neutral_unlinked_score(players)
-    team_one_score = sum(player_score(player, neutral_score) for player in team_one)
-    team_two_score = sum(player_score(player, neutral_score) for player in team_two)
+    scores_available = has_valid_player_scores(players)
+    team_one_score = sum(player_score(player, neutral_score) for player in team_one) if scores_available else "-"
+    team_two_score = sum(player_score(player, neutral_score) for player in team_two) if scores_available else "-"
     team_one_mentions = ", ".join(f"<@{player['userId']}>" for player in team_one)
     team_two_mentions = ", ".join(f"<@{player['userId']}>" for player in team_two)
     message = (
         f"Match started ({team_mode_label(mode)}).\n"
-        f"Team 1 ({team_one_score}): {team_one_mentions}\n"
-        f"Team 2 ({team_two_score}): {team_two_mentions}"
+        f"Team 1 ({len(team_one)} players, {team_one_score} score): {team_one_mentions}\n"
+        f"Team 2 ({len(team_two)} players, {team_two_score} score): {team_two_mentions}"
     )
+    if note:
+        message += f"\n{note}"
     return True, message, json_data
 
 
@@ -2078,6 +2129,9 @@ async def start_matchmaking_queue(guild, json_data, starter_user_id=None):
     if len(queue) > 10:
         writeToJsonFile(jsonFile, json_data)
         return False, "The queue cannot contain more than 10 players.", json_data
+    if len(queue) % 2 and effective_odd_players_policy(json_data) == "require_even":
+        writeToJsonFile(jsonFile, json_data)
+        return False, "Odd player policy requires an even number of players before starting.", json_data
 
     mode = effective_matchmaking_team_mode(json_data)
     if mode == "captains":
@@ -2092,11 +2146,17 @@ async def start_matchmaking_queue(guild, json_data, starter_user_id=None):
         return True, f"Captain draft started. Captains: {captains}.", json_data
 
     if mode == "balanced_rank":
-        team_one, team_two = balanced_rank_teams(queue)
+        if has_valid_player_scores(queue):
+            team_one, team_two = balanced_rank_teams(queue)
+            note = None
+        else:
+            team_one, team_two = random_teams(queue)
+            note = "Balance fallback: random teams were used because no valid player scores were cached."
     else:
         team_one, team_two = random_teams(queue)
+        note = None
 
-    return await finish_matchmaking_teams(guild, json_data, team_one, team_two, mode)
+    return await finish_matchmaking_teams(guild, json_data, team_one, team_two, mode, note)
 
 
 async def finish_captain_draft_if_complete(guild, json_data):
@@ -2154,6 +2214,232 @@ class CaptainPickView(disnake.ui.View):
     def __init__(self, json_data):
         super().__init__(timeout=90)
         self.add_item(CaptainPickSelect(json_data))
+
+
+def matchmaking_settings_embed(json_data, admin=False):
+    ensure_matchmaking_state(json_data)
+    title = "Matchmaking admin settings" if admin else "Matchmaking settings"
+    description = (
+        f"Team mode: **{team_mode_label(effective_matchmaking_team_mode(json_data))}** ({team_mode_lock_text(json_data)})\n"
+        f"Voice: **{voice_mode_label(effective_matchmaking_separate_channels(json_data))}** ({forced_mode_text(json_data)})\n"
+        f"Odd players: **{odd_players_policy_label(effective_odd_players_policy(json_data))}**"
+    )
+    if json_data.get("matchmakingDraft"):
+        description += "\nCaptain draft is active; team mode changes are locked until it finishes."
+    embed = disnake.Embed(
+        title=title,
+        description=description,
+        colour=disnake.Colour.blurple(),
+        timestamp=datetime.now()
+    )
+    return embed
+
+
+def team_mode_options(selected_mode=None, include_unlocked=False, forced_mode=None):
+    options = []
+    if include_unlocked:
+        options.append(disnake.SelectOption(label="Unlocked", value="unlocked", default=forced_mode not in MATCHMAKING_TEAM_MODES))
+    for mode in MATCHMAKING_TEAM_MODES:
+        label = team_mode_label(mode)
+        value = f"force:{mode}" if include_unlocked else mode
+        default = forced_mode == mode if include_unlocked else selected_mode == mode
+        options.append(disnake.SelectOption(label=label if not include_unlocked else f"Force {label}", value=value, default=default))
+    return options
+
+
+def voice_mode_options(selected_value=None, include_unlocked=False, forced_value=None):
+    if include_unlocked:
+        return [
+            disnake.SelectOption(label="Unlocked", value="unlocked", default=forced_value is None),
+            disnake.SelectOption(label="Force same channel", value="force:same", default=forced_value is False),
+            disnake.SelectOption(label="Force separate team channels", value="force:separate", default=forced_value is True),
+        ]
+    return [
+        disnake.SelectOption(label="Same channel", value="same", default=selected_value is False),
+        disnake.SelectOption(label="Separate team channels", value="separate", default=selected_value is True),
+    ]
+
+
+def odd_policy_options(selected_policy):
+    return [
+        disnake.SelectOption(label=odd_players_policy_label(policy), value=policy, default=selected_policy == policy)
+        for policy in MATCHMAKING_ODD_PLAYER_POLICIES
+    ]
+
+
+async def refresh_matchmaking_setting_views(inter, json_data, admin=False):
+    await refresh_configured_matchmaking_message(json_data)
+    await refresh_configured_admin_message(json_data)
+    view = MatchmakingAdminSettingsView(json_data) if admin else MatchmakingSettingsView(inter.author.id, json_data)
+    await inter.response.edit_message(embed=matchmaking_settings_embed(json_data, admin), view=view)
+
+
+async def require_queued_settings_user(inter, json_data):
+    if user_queue_index(json_data["matchmakingQueue"], inter.author.id) is None:
+        await inter.response.send_message("Only queued players can change matchmaking settings.", ephemeral=True)
+        return False
+    return True
+
+
+class PublicTeamModeSelect(disnake.ui.Select):
+    def __init__(self, json_data):
+        forced = json_data.get("matchmakingTeamModeForced") in MATCHMAKING_TEAM_MODES
+        disabled = bool(json_data.get("matchmakingDraft") or forced)
+        selected_mode = effective_matchmaking_team_mode(json_data) if forced else json_data.get("matchmakingTeamMode")
+        super().__init__(
+            placeholder="Team mode",
+            min_values=1,
+            max_values=1,
+            options=team_mode_options(selected_mode),
+            disabled=disabled
+        )
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        json_data = ensure_matchmaking_state(load_json_data())
+        if not await require_queued_settings_user(inter, json_data):
+            return
+        if json_data.get("matchmakingDraft"):
+            await inter.response.send_message("Team mode cannot be changed during a captain draft.", ephemeral=True)
+            return
+        if json_data.get("matchmakingTeamModeForced") in MATCHMAKING_TEAM_MODES:
+            await inter.response.send_message(f"Team mode is locked by administration: {team_mode_lock_text(json_data)}.", ephemeral=True)
+            return
+        json_data["matchmakingTeamMode"] = self.values[0]
+        writeToJsonFile(jsonFile, json_data)
+        mode = team_mode_label(effective_matchmaking_team_mode(json_data))
+        log_event("matchmaking_team_mode_selected", actor=interaction_actor(inter), status="success", summary=f"Team mode set to {mode}.", details={"mode": self.values[0]})
+        await refresh_matchmaking_setting_views(inter, json_data)
+
+
+class PublicVoiceModeSelect(disnake.ui.Select):
+    def __init__(self, json_data):
+        forced = json_data.get("matchmakingSeparateChannelsForced")
+        selected_value = effective_matchmaking_separate_channels(json_data) if forced is not None else json_data.get("matchmakingSeparateChannels", False)
+        super().__init__(
+            placeholder="Voice channels",
+            min_values=1,
+            max_values=1,
+            options=voice_mode_options(selected_value),
+            disabled=forced is not None
+        )
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        json_data = ensure_matchmaking_state(load_json_data())
+        if not await require_queued_settings_user(inter, json_data):
+            return
+        if json_data.get("matchmakingSeparateChannelsForced") is not None:
+            await inter.response.send_message(f"Voice mode is locked by administration: {forced_mode_text(json_data)}.", ephemeral=True)
+            return
+        json_data["matchmakingSeparateChannels"] = self.values[0] == "separate"
+        writeToJsonFile(jsonFile, json_data)
+        mode = voice_mode_label(json_data["matchmakingSeparateChannels"])
+        log_event("matchmaking_voice_mode_selected", actor=interaction_actor(inter), status="success", summary=f"Voice mode set to {mode}.", details={"separate": json_data["matchmakingSeparateChannels"]})
+        await refresh_matchmaking_setting_views(inter, json_data)
+
+
+class PublicOddPolicySelect(disnake.ui.Select):
+    def __init__(self, json_data):
+        super().__init__(
+            placeholder="Odd players",
+            min_values=1,
+            max_values=1,
+            options=odd_policy_options(effective_odd_players_policy(json_data))
+        )
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        json_data = ensure_matchmaking_state(load_json_data())
+        if not await require_queued_settings_user(inter, json_data):
+            return
+        json_data["matchmakingOddPlayersPolicy"] = self.values[0]
+        writeToJsonFile(jsonFile, json_data)
+        policy = odd_players_policy_label(self.values[0])
+        log_event("matchmaking_odd_players_policy_selected", actor=interaction_actor(inter), status="success", summary=f"Odd player policy set to {policy}.", details={"policy": self.values[0]})
+        await refresh_matchmaking_setting_views(inter, json_data)
+
+
+class MatchmakingSettingsView(disnake.ui.View):
+    def __init__(self, user_id, json_data=None):
+        super().__init__(timeout=180)
+        json_data = ensure_matchmaking_state(json_data or load_json_data())
+        self.user_id = str(user_id)
+        self.add_item(PublicTeamModeSelect(json_data))
+        self.add_item(PublicVoiceModeSelect(json_data))
+        self.add_item(PublicOddPolicySelect(json_data))
+
+
+class AdminTeamModeLockSelect(disnake.ui.Select):
+    def __init__(self, json_data):
+        super().__init__(
+            placeholder="Team mode lock",
+            min_values=1,
+            max_values=1,
+            options=team_mode_options(include_unlocked=True, forced_mode=json_data.get("matchmakingTeamModeForced"))
+        )
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+        json_data = ensure_matchmaking_state(load_json_data())
+        if json_data.get("matchmakingDraft"):
+            await inter.response.send_message("Team mode cannot be locked while a captain draft is active.", ephemeral=True)
+            return
+        value = None if self.values[0] == "unlocked" else self.values[0].split(":", 1)[1]
+        json_data["matchmakingTeamModeForced"] = value
+        writeToJsonFile(jsonFile, json_data)
+        log_event("matchmaking_team_mode_forced", actor=interaction_actor(inter), status="success", summary=f"Team mode lock set to {team_mode_lock_text(json_data)}", details={"forced": value})
+        await refresh_matchmaking_setting_views(inter, json_data, admin=True)
+
+
+class AdminVoiceModeLockSelect(disnake.ui.Select):
+    def __init__(self, json_data):
+        super().__init__(
+            placeholder="Voice channel lock",
+            min_values=1,
+            max_values=1,
+            options=voice_mode_options(include_unlocked=True, forced_value=json_data.get("matchmakingSeparateChannelsForced"))
+        )
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+        json_data = ensure_matchmaking_state(load_json_data())
+        value = None
+        if self.values[0] == "force:same":
+            value = False
+        elif self.values[0] == "force:separate":
+            value = True
+        json_data["matchmakingSeparateChannelsForced"] = value
+        writeToJsonFile(jsonFile, json_data)
+        log_event("matchmaking_separate_channels_forced", actor=interaction_actor(inter), status="success", summary=f"Voice lock set to {forced_mode_text(json_data)}", details={"forced": value})
+        await refresh_matchmaking_setting_views(inter, json_data, admin=True)
+
+
+class AdminOddPolicySelect(disnake.ui.Select):
+    def __init__(self, json_data):
+        super().__init__(
+            placeholder="Odd players policy",
+            min_values=1,
+            max_values=1,
+            options=odd_policy_options(effective_odd_players_policy(json_data))
+        )
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+        json_data = ensure_matchmaking_state(load_json_data())
+        json_data["matchmakingOddPlayersPolicy"] = self.values[0]
+        writeToJsonFile(jsonFile, json_data)
+        log_event("matchmaking_odd_players_policy_selected", actor=interaction_actor(inter), status="success", summary=f"Odd player policy set to {odd_players_policy_label(self.values[0])}.", details={"policy": self.values[0]})
+        await refresh_matchmaking_setting_views(inter, json_data, admin=True)
+
+
+class MatchmakingAdminSettingsView(disnake.ui.View):
+    def __init__(self, json_data=None):
+        super().__init__(timeout=180)
+        json_data = ensure_matchmaking_state(json_data or load_json_data())
+        self.add_item(AdminTeamModeLockSelect(json_data))
+        self.add_item(AdminVoiceModeLockSelect(json_data))
+        self.add_item(AdminOddPolicySelect(json_data))
 
 
 class MatchmakingView(disnake.ui.View):
@@ -2226,47 +2512,13 @@ class MatchmakingView(disnake.ui.View):
         else:
             await inter.followup.send("You left the matchmaking queue.", ephemeral=True)
 
-    @disnake.ui.button(label="Separate channels", style=disnake.ButtonStyle.blurple, custom_id="matchmaking:separate_channels")
-    async def separate_channels(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
-        await inter.response.defer(ephemeral=True)
+    @disnake.ui.button(label="Settings", style=disnake.ButtonStyle.blurple, custom_id="matchmaking:settings")
+    async def settings(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
         json_data = ensure_matchmaking_state(load_json_data())
-        if json_data.get("matchmakingSeparateChannelsForced") is not None:
-            await inter.followup.send(f"Separate channels mode is locked by administration: {forced_mode_text(json_data)}.", ephemeral=True)
-            return
-
         if user_queue_index(json_data["matchmakingQueue"], inter.author.id) is None:
-            await inter.followup.send("Only queued players can change matchmaking mode.", ephemeral=True)
+            await inter.response.send_message("Only queued players can open matchmaking settings.", ephemeral=True)
             return
-
-        json_data["matchmakingSeparateChannels"] = not json_data["matchmakingSeparateChannels"]
-        writeToJsonFile(jsonFile, json_data)
-        await refresh_configured_matchmaking_message(json_data)
-        await refresh_configured_admin_message(json_data)
-        mode = "enabled" if json_data["matchmakingSeparateChannels"] else "disabled"
-        log_event("matchmaking_separate_channels_toggle", actor=interaction_actor(inter), status="success", summary=f"Separate channels {mode}.")
-        await inter.followup.send(f"Separate channels {mode}.", ephemeral=True)
-
-    @disnake.ui.button(label="Team mode", style=disnake.ButtonStyle.blurple, custom_id="matchmaking:team_mode")
-    async def team_mode(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
-        await inter.response.defer(ephemeral=True)
-        json_data = ensure_matchmaking_state(load_json_data())
-        if json_data.get("matchmakingDraft"):
-            await inter.followup.send("Team mode cannot be changed during a captain draft.", ephemeral=True)
-            return
-        if json_data.get("matchmakingTeamModeForced") in MATCHMAKING_TEAM_MODES:
-            await inter.followup.send(f"Team mode is locked by administration: {team_mode_lock_text(json_data)}.", ephemeral=True)
-            return
-        if user_queue_index(json_data["matchmakingQueue"], inter.author.id) is None:
-            await inter.followup.send("Only queued players can change team mode.", ephemeral=True)
-            return
-
-        json_data["matchmakingTeamMode"] = next_team_mode(json_data.get("matchmakingTeamMode"))
-        writeToJsonFile(jsonFile, json_data)
-        await refresh_configured_matchmaking_message(json_data)
-        await refresh_configured_admin_message(json_data)
-        mode = team_mode_label(effective_matchmaking_team_mode(json_data))
-        log_event("matchmaking_team_mode_toggle", actor=interaction_actor(inter), status="success", summary=f"Team mode set to {mode}.", details={"mode": json_data["matchmakingTeamMode"]})
-        await inter.followup.send(f"Team mode set to {mode}.", ephemeral=True)
+        await inter.response.send_message(embed=matchmaking_settings_embed(json_data), view=MatchmakingSettingsView(inter.author.id, json_data), ephemeral=True)
 
     @disnake.ui.button(label="Pick player", style=disnake.ButtonStyle.green, custom_id="matchmaking:captains:pick")
     async def pick_player(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -2615,61 +2867,12 @@ class MatchmakingAdminView(disnake.ui.View):
         await refresh_configured_admin_message(json_data)
         await inter.followup.send(message, ephemeral=True)
 
-    @disnake.ui.button(label="Voice unlocked", style=disnake.ButtonStyle.gray, custom_id="admin:matchmaking:unlock", row=1)
-    async def unlock_mode(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
-        await self.set_forced_mode(inter, None)
-
-    @disnake.ui.button(label="Voice forced on", style=disnake.ButtonStyle.blurple, custom_id="admin:matchmaking:force_on", row=1)
-    async def force_on(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
-        await self.set_forced_mode(inter, True)
-
-    @disnake.ui.button(label="Voice forced off", style=disnake.ButtonStyle.red, custom_id="admin:matchmaking:force_off", row=1)
-    async def force_off(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
-        await self.set_forced_mode(inter, False)
-
-    async def set_forced_mode(self, inter, value):
+    @disnake.ui.button(label="Configure", style=disnake.ButtonStyle.blurple, custom_id="admin:matchmaking:configure", row=1)
+    async def configure(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
         if not await require_admin_interaction(inter):
             return
-
         json_data = ensure_matchmaking_state(load_json_data())
-        json_data["matchmakingSeparateChannelsForced"] = value
-        writeToJsonFile(jsonFile, json_data)
-        log_event("matchmaking_separate_channels_forced", actor=interaction_actor(inter), status="success", summary=f"Separate channels lock set to {forced_mode_text(json_data)}", details={"forced": value})
-        await refresh_configured_matchmaking_message(json_data)
-        await refresh_configured_admin_message(json_data)
-        await inter.response.edit_message(embed=matchmaking_admin_embed(json_data), view=MatchmakingAdminView(json_data))
-
-    @disnake.ui.button(label="Team unlocked", style=disnake.ButtonStyle.gray, custom_id="admin:matchmaking:team_unlock", row=2)
-    async def unlock_team_mode(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
-        await self.set_forced_team_mode(inter, None)
-
-    @disnake.ui.button(label="Force random", style=disnake.ButtonStyle.gray, custom_id="admin:matchmaking:team_random", row=2)
-    async def force_random_team_mode(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
-        await self.set_forced_team_mode(inter, "random")
-
-    @disnake.ui.button(label="Force balanced", style=disnake.ButtonStyle.blurple, custom_id="admin:matchmaking:team_balanced", row=2)
-    async def force_balanced_team_mode(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
-        await self.set_forced_team_mode(inter, "balanced_rank")
-
-    @disnake.ui.button(label="Force captains", style=disnake.ButtonStyle.green, custom_id="admin:matchmaking:team_captains", row=2)
-    async def force_captains_team_mode(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
-        await self.set_forced_team_mode(inter, "captains")
-
-    async def set_forced_team_mode(self, inter, value):
-        if not await require_admin_interaction(inter):
-            return
-
-        json_data = ensure_matchmaking_state(load_json_data())
-        if json_data.get("matchmakingDraft"):
-            await send_ephemeral(inter, "Team mode cannot be locked while a captain draft is active.")
-            return
-        json_data["matchmakingTeamModeForced"] = value
-        writeToJsonFile(jsonFile, json_data)
-        mode_text = team_mode_lock_text(json_data)
-        log_event("matchmaking_team_mode_forced", actor=interaction_actor(inter), status="success", summary=f"Team mode lock set to {mode_text}", details={"forced": value})
-        await refresh_configured_matchmaking_message(json_data)
-        await refresh_configured_admin_message(json_data)
-        await inter.response.edit_message(embed=matchmaking_admin_embed(json_data), view=MatchmakingAdminView(json_data))
+        await inter.response.send_message(embed=matchmaking_settings_embed(json_data, admin=True), view=MatchmakingAdminSettingsView(json_data), ephemeral=True)
 
 
 class AuditActorSearchModal(disnake.ui.Modal):
@@ -2918,14 +3121,17 @@ def linked_accounts_admin_embed(json_data):
 
 def matchmaking_admin_embed(json_data):
     ensure_matchmaking_state(json_data)
+    fallback_text = ""
+    if json_data["matchmakingQueue"] and effective_matchmaking_team_mode(json_data) == "balanced_rank" and not has_valid_player_scores(json_data["matchmakingQueue"]):
+        fallback_text = "\nBalance fallback: **random teams** (no valid scores cached)"
     embed = disnake.Embed(
         title="Matchmaking administration",
         description=(
             f"Queue: **{len(json_data['matchmakingQueue'])}/10**\n"
-            f"Team mode: **{team_mode_label(effective_matchmaking_team_mode(json_data))}**\n"
-            f"Team mode lock: **{team_mode_lock_text(json_data)}**\n"
-            f"Separate channels: **{'On' if effective_matchmaking_separate_channels(json_data) else 'Off'}**\n"
-            f"Voice lock: **{forced_mode_text(json_data)}**"
+            f"Team mode: **{team_mode_label(effective_matchmaking_team_mode(json_data))}** ({team_mode_lock_text(json_data)})\n"
+            f"Voice: **{voice_mode_label(effective_matchmaking_separate_channels(json_data))}** ({forced_mode_text(json_data)})\n"
+            f"Odd players: **{odd_players_policy_label(effective_odd_players_policy(json_data))}**"
+            f"{fallback_text}"
         ),
         colour=disnake.Colour.blurple()
     )
