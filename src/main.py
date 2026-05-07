@@ -2182,7 +2182,7 @@ async def finish_matchmaking_teams(guild, json_data, team_one, team_two, mode, n
 
 async def start_matchmaking_queue(guild, json_data, starter_user_id=None):
     json_data = ensure_matchmaking_state(json_data)
-    queue = await active_matchmaking_queue(guild, json_data)
+    queue = json_data.get("matchmakingQueue", [])
 
     if len(queue) < 2:
         writeToJsonFile(jsonFile, json_data)
@@ -2544,24 +2544,28 @@ class StartMatchButton(disnake.ui.Button):
 
     async def callback(self, inter: disnake.MessageInteraction):
         await inter.response.defer(ephemeral=True)
-        json_data = ensure_matchmaking_state(load_json_data())
-        queue = await active_matchmaking_queue(inter.guild, json_data)
-        if user_queue_index(queue, inter.author.id) is None:
-            writeToJsonFile(jsonFile, json_data)
+        try:
+            json_data = ensure_matchmaking_state(load_json_data())
+            queue = await active_matchmaking_queue(inter.guild, json_data)
+            if user_queue_index(queue, inter.author.id) is None:
+                writeToJsonFile(jsonFile, json_data)
+                await refresh_configured_matchmaking_message(json_data)
+                await refresh_configured_admin_message(json_data)
+                await send_ephemeral_followup(inter, "Only queued players can start matchmaking.")
+                return
+
+            success, message, json_data = await start_matchmaking_queue(inter.guild, json_data, inter.author.id)
             await refresh_configured_matchmaking_message(json_data)
             await refresh_configured_admin_message(json_data)
-            await send_ephemeral_followup(inter, "Only queued players can start matchmaking.")
-            return
-
-        success, message, json_data = await start_matchmaking_queue(inter.guild, json_data, inter.author.id)
-        await refresh_configured_matchmaking_message(json_data)
-        await refresh_configured_admin_message(json_data)
-        log_event("matchmaking_start", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"mode": effective_matchmaking_team_mode(json_data)})
-        if success and public_matchmaking_announcement(message):
-            await send_temporary_public_message(inter.channel, message)
-            await send_ephemeral_followup(inter, "Announcement posted publicly and will be deleted in 60 seconds.")
-        else:
-            await send_ephemeral_followup(inter, message)
+            log_event("matchmaking_start", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"mode": effective_matchmaking_team_mode(json_data)})
+            if success and public_matchmaking_announcement(message):
+                await send_temporary_public_message(inter.channel, message)
+                await send_ephemeral_followup(inter, "Announcement posted publicly and will be deleted in 60 seconds.")
+            else:
+                await send_ephemeral_followup(inter, message)
+        except Exception as error:
+            log_event("matchmaking_start", actor=interaction_actor(inter), status="error", summary=f"Start match failed: {error}")
+            await send_ephemeral_followup(inter, f"Start match failed: {error}")
 
 
 class MatchmakingView(disnake.ui.View):
@@ -2962,15 +2966,20 @@ class MatchmakingAdminView(disnake.ui.View):
 
         await inter.response.defer(ephemeral=True)
         json_data = ensure_matchmaking_state(load_json_data())
-        success, message, json_data = await start_matchmaking_queue(inter.guild, json_data, inter.author.id)
-        log_event("matchmaking_force_start", actor=interaction_actor(inter), status="success" if success else "error", summary=message)
-        await refresh_configured_matchmaking_message(json_data)
-        await refresh_configured_admin_message(json_data)
-        if success and public_matchmaking_announcement(message):
-            await send_temporary_public_message(inter.channel, message)
-            await send_ephemeral_followup(inter, "Announcement posted publicly and will be deleted in 60 seconds.")
-        else:
-            await send_ephemeral_followup(inter, message)
+        try:
+            json_data["matchmakingQueue"] = await active_matchmaking_queue(inter.guild, json_data)
+            success, message, json_data = await start_matchmaking_queue(inter.guild, json_data, inter.author.id)
+            log_event("matchmaking_force_start", actor=interaction_actor(inter), status="success" if success else "error", summary=message)
+            await refresh_configured_matchmaking_message(json_data)
+            await refresh_configured_admin_message(json_data)
+            if success and public_matchmaking_announcement(message):
+                await send_temporary_public_message(inter.channel, message)
+                await send_ephemeral_followup(inter, "Announcement posted publicly and will be deleted in 60 seconds.")
+            else:
+                await send_ephemeral_followup(inter, message)
+        except Exception as error:
+            log_event("matchmaking_force_start", actor=interaction_actor(inter), status="error", summary=f"Force start failed: {error}")
+            await send_ephemeral_followup(inter, f"Force start failed: {error}")
 
     @disnake.ui.button(label="Configure", style=disnake.ButtonStyle.blurple, custom_id="admin:matchmaking:configure", row=1)
     async def configure(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
