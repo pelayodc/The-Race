@@ -32,6 +32,7 @@ MATCHMAKING_ODD_PLAYER_POLICY_LABELS = {
     "require_even": "Require even teams"
 }
 CAPTAIN_DRAFT_TIMEOUT_SECONDS = 90
+EPHEMERAL_DELETE_SECONDS = 120
 AUDIT_CATEGORY_LABELS = {
     "admin": "Admin",
     "matchmaking": "Matchmaking",
@@ -254,11 +255,47 @@ def missing_bot_channel_permissions(channel, bot_member):
     return missing
 
 
+async def delete_interaction_original_later(inter, delay_seconds=EPHEMERAL_DELETE_SECONDS):
+    await asyncio.sleep(delay_seconds)
+    try:
+        await inter.delete_original_message()
+    except (disnake.NotFound, disnake.Forbidden, disnake.HTTPException):
+        pass
+
+
+async def send_ephemeral_response(inter, message=None, **kwargs):
+    if message is None and "content" in kwargs:
+        message = kwargs.pop("content")
+    await inter.response.send_message(message, ephemeral=True, **kwargs)
+    asyncio.create_task(delete_interaction_original_later(inter))
+
+
+async def send_ephemeral_followup(inter, message=None, **kwargs):
+    if message is None and "content" in kwargs:
+        message = kwargs.pop("content")
+    try:
+        sent_message = await inter.followup.send(message, ephemeral=True, wait=True, **kwargs)
+    except TypeError:
+        sent_message = await inter.followup.send(message, ephemeral=True, **kwargs)
+    if sent_message:
+        asyncio.create_task(delete_message_later(sent_message, EPHEMERAL_DELETE_SECONDS))
+
+
+async def send_ephemeral_inter_send(inter, message=None, **kwargs):
+    if message is None and "content" in kwargs:
+        message = kwargs.pop("content")
+    sent_message = await inter.send(message, ephemeral=True, **kwargs)
+    if sent_message:
+        asyncio.create_task(delete_message_later(sent_message, EPHEMERAL_DELETE_SECONDS))
+    else:
+        asyncio.create_task(delete_interaction_original_later(inter))
+
+
 async def send_ephemeral(inter, message=None, embed=None, view=None):
     if inter.response.is_done():
-        await inter.followup.send(message, embed=embed, view=view, ephemeral=True)
+        await send_ephemeral_followup(inter, message, embed=embed, view=view)
     else:
-        await inter.response.send_message(message, embed=embed, view=view, ephemeral=True)
+        await send_ephemeral_response(inter, message, embed=embed, view=view)
 
 
 async def delete_message_later(message, delay_seconds=60):
@@ -1306,9 +1343,9 @@ class PersonalMatchButton(disnake.ui.Button):
         json_data = ensure_admin_state(load_json_data())
         embed, error = match_detail_embed(json_data, self.summoner_name, self.game_index)
         if error:
-            await inter.response.send_message(error, ephemeral=True)
+            await send_ephemeral_response(inter, error)
             return
-        await inter.response.send_message(embed=embed, view=MatchDetailView(self.summoner_name, self.game_index), ephemeral=True)
+        await send_ephemeral_response(inter, embed=embed, view=MatchDetailView(self.summoner_name, self.game_index))
 
 
 class PersonalReportView(disnake.ui.View):
@@ -1330,22 +1367,22 @@ class GoldGraphButton(disnake.ui.Button):
         json_data = ensure_admin_state(load_json_data())
         context, error = cached_personal_game_context(json_data, self.summoner_name, self.game_index)
         if error:
-            await inter.followup.send(error, ephemeral=True)
+            await send_ephemeral_followup(inter, error)
             return
 
         match_id = context["game"]["matchId"]
         ok, timeline_data, status = await fetch_match_timeline(json_data, self.summoner_name, match_id)
         if not ok:
-            await inter.followup.send(status, ephemeral=True)
+            await send_ephemeral_followup(inter, status)
             return
 
         image_buffer = generateGoldGraphImage(context["match_data"], timeline_data)
         if not image_buffer:
-            await inter.followup.send("No timeline gold data was available for this match.", ephemeral=True)
+            await send_ephemeral_followup(inter, "No timeline gold data was available for this match.")
             return
 
         file = disnake.File(image_buffer, filename=f"{match_id}-gold.png")
-        await inter.followup.send(content=status, file=file, ephemeral=True)
+        await send_ephemeral_followup(inter, content=status, file=file)
 
 
 class CompareTeamsButton(disnake.ui.Button):
@@ -1358,7 +1395,7 @@ class CompareTeamsButton(disnake.ui.Button):
         json_data = ensure_admin_state(load_json_data())
         embed, error = compare_teams_embed(json_data, self.summoner_name, self.game_index)
         if error:
-            await inter.response.send_message(error, ephemeral=True)
+            await send_ephemeral_response(inter, error)
             return
         await inter.response.edit_message(embed=embed, view=MatchDetailView(self.summoner_name, self.game_index))
 
@@ -1376,7 +1413,7 @@ class MatchNavigationButton(disnake.ui.Button):
         json_data = ensure_admin_state(load_json_data())
         embed, error = match_detail_embed(json_data, self.summoner_name, next_index)
         if error:
-            await inter.response.send_message(error, ephemeral=True)
+            await send_ephemeral_response(inter, error)
             return
         await inter.response.edit_message(embed=embed, view=MatchDetailView(self.summoner_name, next_index))
 
@@ -2215,15 +2252,15 @@ class CaptainPickSelect(disnake.ui.Select):
         json_data = ensure_matchmaking_state(load_json_data())
         draft = json_data.get("matchmakingDraft")
         if not draft:
-            await inter.followup.send("No captain draft is currently active.", ephemeral=True)
+            await send_ephemeral_followup(inter, "No captain draft is currently active.")
             return
         if str(draft.get("turnCaptainId")) != str(inter.author.id):
-            await inter.followup.send("It is not your turn to pick.", ephemeral=True)
+            await send_ephemeral_followup(inter, "It is not your turn to pick.")
             return
 
         success, message = apply_draft_pick(json_data, self.values[0])
         if not success:
-            await inter.followup.send(message, ephemeral=True)
+            await send_ephemeral_followup(inter, message)
             return
 
         finished, finish_message, json_data = await finish_captain_draft_if_complete(inter.guild, json_data)
@@ -2233,9 +2270,9 @@ class CaptainPickSelect(disnake.ui.Select):
         log_event("matchmaking_captain_pick", actor=interaction_actor(inter), status="success", summary=message, details={"pickedUserId": str(self.values[0]), "finished": finished})
         if finished and finish_message:
             await send_temporary_public_message(inter.channel, finish_message)
-            await inter.followup.send(f"{message}\nTeams announced publicly and will be deleted in 60 seconds.", ephemeral=True)
+            await send_ephemeral_followup(inter, f"{message}\nTeams announced publicly and will be deleted in 60 seconds.")
         else:
-            await inter.followup.send(f"{message}\nWaiting for the next captain pick.", ephemeral=True)
+            await send_ephemeral_followup(inter, f"{message}\nWaiting for the next captain pick.")
 
 
 class CaptainPickView(disnake.ui.View):
@@ -2304,7 +2341,7 @@ async def refresh_matchmaking_setting_views(inter, json_data, admin=False):
 
 async def require_queued_settings_user(inter, json_data):
     if user_queue_index(json_data["matchmakingQueue"], inter.author.id) is None:
-        await inter.response.send_message("Only queued players can change matchmaking settings.", ephemeral=True)
+        await send_ephemeral_response(inter, "Only queued players can change matchmaking settings.")
         return False
     return True
 
@@ -2327,10 +2364,10 @@ class PublicTeamModeSelect(disnake.ui.Select):
         if not await require_queued_settings_user(inter, json_data):
             return
         if json_data.get("matchmakingDraft"):
-            await inter.response.send_message("Team mode cannot be changed during a captain draft.", ephemeral=True)
+            await send_ephemeral_response(inter, "Team mode cannot be changed during a captain draft.")
             return
         if json_data.get("matchmakingTeamModeForced") in MATCHMAKING_TEAM_MODES:
-            await inter.response.send_message(f"Team mode is locked by administration: {team_mode_lock_text(json_data)}.", ephemeral=True)
+            await send_ephemeral_response(inter, f"Team mode is locked by administration: {team_mode_lock_text(json_data)}.")
             return
         json_data["matchmakingTeamMode"] = self.values[0]
         writeToJsonFile(jsonFile, json_data)
@@ -2356,7 +2393,7 @@ class PublicVoiceModeSelect(disnake.ui.Select):
         if not await require_queued_settings_user(inter, json_data):
             return
         if json_data.get("matchmakingSeparateChannelsForced") is not None:
-            await inter.response.send_message(f"Voice mode is locked by administration: {forced_mode_text(json_data)}.", ephemeral=True)
+            await send_ephemeral_response(inter, f"Voice mode is locked by administration: {forced_mode_text(json_data)}.")
             return
         json_data["matchmakingSeparateChannels"] = self.values[0] == "separate"
         writeToJsonFile(jsonFile, json_data)
@@ -2409,7 +2446,7 @@ class AdminTeamModeLockSelect(disnake.ui.Select):
             return
         json_data = ensure_matchmaking_state(load_json_data())
         if json_data.get("matchmakingDraft"):
-            await inter.response.send_message("Team mode cannot be locked while a captain draft is active.", ephemeral=True)
+            await send_ephemeral_response(inter, "Team mode cannot be locked while a captain draft is active.")
             return
         value = None if self.values[0] == "unlocked" else self.values[0].split(":", 1)[1]
         json_data["matchmakingTeamModeForced"] = value
@@ -2483,17 +2520,17 @@ class CaptainPickButton(disnake.ui.Button):
         json_data = ensure_matchmaking_state(load_json_data())
         draft = json_data.get("matchmakingDraft")
         if not draft:
-            await inter.response.send_message("No captain draft is currently active.", ephemeral=True)
+            await send_ephemeral_response(inter, "No captain draft is currently active.")
             return
         if str(draft.get("turnCaptainId")) != str(inter.author.id):
-            await inter.response.send_message("It is not your turn to pick.", ephemeral=True)
+            await send_ephemeral_response(inter, "It is not your turn to pick.")
             return
         by_id = players_by_id(json_data.get("matchmakingQueue", []))
         available_remaining = [user_id for user_id in [str(value) for value in draft.get("remainingPlayerIds", [])] if user_id in by_id]
         if not available_remaining:
-            await inter.response.send_message("There are no players left to pick.", ephemeral=True)
+            await send_ephemeral_response(inter, "There are no players left to pick.")
             return
-        await inter.response.send_message("Choose a player for your team.", view=CaptainPickView(json_data), ephemeral=True)
+        await send_ephemeral_response(inter, "Choose a player for your team.", view=CaptainPickView(json_data))
 
 
 class StartMatchButton(disnake.ui.Button):
@@ -2513,7 +2550,7 @@ class StartMatchButton(disnake.ui.Button):
             writeToJsonFile(jsonFile, json_data)
             await refresh_configured_matchmaking_message(json_data)
             await refresh_configured_admin_message(json_data)
-            await inter.followup.send("Only queued players can start matchmaking.", ephemeral=True)
+            await send_ephemeral_followup(inter, "Only queued players can start matchmaking.")
             return
 
         success, message, json_data = await start_matchmaking_queue(inter.guild, json_data, inter.author.id)
@@ -2522,9 +2559,9 @@ class StartMatchButton(disnake.ui.Button):
         log_event("matchmaking_start", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"mode": effective_matchmaking_team_mode(json_data)})
         if success and public_matchmaking_announcement(message):
             await send_temporary_public_message(inter.channel, message)
-            await inter.followup.send("Announcement posted publicly and will be deleted in 60 seconds.", ephemeral=True)
+            await send_ephemeral_followup(inter, "Announcement posted publicly and will be deleted in 60 seconds.")
         else:
-            await inter.followup.send(message, ephemeral=True)
+            await send_ephemeral_followup(inter, message)
 
 
 class MatchmakingView(disnake.ui.View):
@@ -2544,12 +2581,12 @@ class MatchmakingView(disnake.ui.View):
         member = inter.author
         voice_channel = member.voice.channel if getattr(member, "voice", None) and member.voice else None
         if voice_channel is None:
-            await inter.followup.send("You need to be in a voice channel to join the queue.", ephemeral=True)
+            await send_ephemeral_followup(inter, "You need to be in a voice channel to join the queue.")
             return
 
         json_data = ensure_matchmaking_state(load_json_data())
         if json_data.get("matchmakingDraft"):
-            await inter.followup.send("A captain draft is already active. Wait for it to finish before joining.", ephemeral=True)
+            await send_ephemeral_followup(inter, "A captain draft is already active. Wait for it to finish before joining.")
             return
         queue = json_data["matchmakingQueue"]
         index = user_queue_index(queue, member.id)
@@ -2560,7 +2597,7 @@ class MatchmakingView(disnake.ui.View):
             response = "Your voice channel was updated."
         else:
             if len(queue) >= 10:
-                await inter.followup.send("The matchmaking queue is full.", ephemeral=True)
+                await send_ephemeral_followup(inter, "The matchmaking queue is full.")
                 return
             player = {
                 "userId": member.id,
@@ -2575,14 +2612,14 @@ class MatchmakingView(disnake.ui.View):
         await refresh_configured_matchmaking_message(json_data)
         await refresh_configured_admin_message(json_data)
         log_event("matchmaking_join", actor=interaction_actor(inter), status="success", summary=response)
-        await inter.followup.send(response, ephemeral=True)
+        await send_ephemeral_followup(inter, response)
 
     @disnake.ui.button(label="Leave", style=disnake.ButtonStyle.red, custom_id="matchmaking:leave")
     async def leave(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
         await inter.response.defer(ephemeral=True)
         json_data = ensure_matchmaking_state(load_json_data())
         if not remove_user_from_matchmaking_queue(json_data, inter.author.id):
-            await inter.followup.send("You are not in the matchmaking queue.", ephemeral=True)
+            await send_ephemeral_followup(inter, "You are not in the matchmaking queue.")
             return
         draft_changed, draft_cancelled = remove_player_from_matchmaking_draft(json_data, inter.author.id)
 
@@ -2599,23 +2636,23 @@ class MatchmakingView(disnake.ui.View):
         log_event("matchmaking_leave", actor=interaction_actor(inter), status="success", summary="User left matchmaking queue.")
         if draft_cancelled:
             log_event("matchmaking_captain_draft_cancelled", actor=interaction_actor(inter), status="error", summary="Captain draft cancelled because a captain left the queue.")
-            await inter.followup.send("You left the matchmaking queue. Captain draft cancelled.", ephemeral=True)
+            await send_ephemeral_followup(inter, "You left the matchmaking queue. Captain draft cancelled.")
         elif draft_changed:
             log_event("matchmaking_captain_draft_player_removed", actor=interaction_actor(inter), status="success", summary="User left active captain draft.")
             message = "You left the matchmaking queue and were removed from the captain draft."
             if finished_message:
                 message += "\nTeams announced publicly and will be deleted in 60 seconds."
-            await inter.followup.send(message, ephemeral=True)
+            await send_ephemeral_followup(inter, message)
         else:
-            await inter.followup.send("You left the matchmaking queue.", ephemeral=True)
+            await send_ephemeral_followup(inter, "You left the matchmaking queue.")
 
     @disnake.ui.button(label="Settings", style=disnake.ButtonStyle.blurple, custom_id="matchmaking:settings")
     async def settings(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
         json_data = ensure_matchmaking_state(load_json_data())
         if user_queue_index(json_data["matchmakingQueue"], inter.author.id) is None:
-            await inter.response.send_message("Only queued players can open matchmaking settings.", ephemeral=True)
+            await send_ephemeral_response(inter, "Only queued players can open matchmaking settings.")
             return
-        await inter.response.send_message(embed=matchmaking_settings_embed(json_data), view=MatchmakingSettingsView(inter.author.id, json_data), ephemeral=True)
+        await send_ephemeral_response(inter, embed=matchmaking_settings_embed(json_data), view=MatchmakingSettingsView(inter.author.id, json_data))
 
 
 class AddSummonerModal(disnake.ui.Modal):
@@ -2648,7 +2685,7 @@ class AddSummonerModal(disnake.ui.Modal):
         success, message = await add_summoner_to_data(name, tagline, platform, region)
         log_event("leaderboard_summoner_add", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"name": name, "tagline": tagline, "platform": platform, "region": region})
         await refresh_configured_admin_message()
-        await inter.followup.send(message, ephemeral=True)
+        await send_ephemeral_followup(inter, message)
 
 
 class LinkAccountModal(disnake.ui.Modal):
@@ -2670,7 +2707,7 @@ class LinkAccountModal(disnake.ui.Modal):
         if not member:
             message = "Invalid Discord user."
             log_event("discord_link_created", actor=interaction_actor(inter), status="error", summary=message)
-            await inter.followup.send(message, ephemeral=True)
+            await send_ephemeral_followup(inter, message)
             return
 
         json_data = ensure_admin_state(load_json_data())
@@ -2678,7 +2715,7 @@ class LinkAccountModal(disnake.ui.Modal):
         if not summoner:
             message = f"{inter.text_values['name']}#{normalize_tagline(inter.text_values['tagline'])} has not been added"
             log_event("discord_link_created", actor=interaction_actor(inter), status="error", summary=message, details={"discordUserId": str(member.id)})
-            await inter.followup.send(message, ephemeral=True)
+            await send_ephemeral_followup(inter, message)
             return
 
         primary_value = inter.text_values.get("primary", "").strip().lower()
@@ -2687,7 +2724,7 @@ class LinkAccountModal(disnake.ui.Modal):
         writeToJsonFile(jsonFile, json_data)
         log_event("discord_link_created", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"discordUserId": str(member.id), "summoner": summoner, "primary": primary})
         await refresh_configured_admin_message(json_data)
-        await inter.followup.send(message, ephemeral=True)
+        await send_ephemeral_followup(inter, message)
 
 
 class UnlinkAccountModal(disnake.ui.Modal):
@@ -2707,14 +2744,14 @@ class UnlinkAccountModal(disnake.ui.Modal):
         if not summoner:
             message = f"{inter.text_values['name']}#{normalize_tagline(inter.text_values['tagline'])} has not been added"
             log_event("discord_link_removed", actor=interaction_actor(inter), status="error", summary=message)
-            await inter.response.send_message(message, ephemeral=True)
+            await send_ephemeral_response(inter, message)
             return
 
         success, message = unlink_summoner_from_discord(json_data, summoner)
         writeToJsonFile(jsonFile, json_data)
         log_event("discord_link_removed", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"summoner": summoner})
         await refresh_configured_admin_message(json_data)
-        await inter.response.send_message(message, ephemeral=True)
+        await send_ephemeral_response(inter, message)
 
 
 class SetPrimaryAccountModal(disnake.ui.Modal):
@@ -2735,7 +2772,7 @@ class SetPrimaryAccountModal(disnake.ui.Modal):
         if not member:
             message = "Invalid Discord user."
             log_event("discord_link_primary_changed", actor=interaction_actor(inter), status="error", summary=message)
-            await inter.followup.send(message, ephemeral=True)
+            await send_ephemeral_followup(inter, message)
             return
 
         json_data = ensure_admin_state(load_json_data())
@@ -2743,14 +2780,14 @@ class SetPrimaryAccountModal(disnake.ui.Modal):
         if not summoner:
             message = f"{inter.text_values['name']}#{normalize_tagline(inter.text_values['tagline'])} has not been added"
             log_event("discord_link_primary_changed", actor=interaction_actor(inter), status="error", summary=message, details={"discordUserId": str(member.id)})
-            await inter.followup.send(message, ephemeral=True)
+            await send_ephemeral_followup(inter, message)
             return
 
         success, message = set_primary_summoner_for_user(json_data, member, summoner)
         writeToJsonFile(jsonFile, json_data)
         log_event("discord_link_primary_changed", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"discordUserId": str(member.id), "summoner": summoner})
         await refresh_configured_admin_message(json_data)
-        await inter.followup.send(message, ephemeral=True)
+        await send_ephemeral_followup(inter, message)
 
 
 class LeaderboardRemoveSelect(disnake.ui.Select):
@@ -2778,7 +2815,7 @@ class LeaderboardRemoveSelect(disnake.ui.Select):
         await refresh_configured_admin_message()
         json_data = load_json_data()
         await inter.response.edit_message(embed=leaderboard_users_admin_embed(json_data), view=LeaderboardUsersAdminView(json_data))
-        await inter.followup.send(message, ephemeral=True)
+        await send_ephemeral_followup(inter, message)
 
 
 class QueueRemoveSelect(disnake.ui.Select):
@@ -2820,7 +2857,7 @@ class QueueRemoveSelect(disnake.ui.Select):
         if finished_message:
             await send_temporary_public_message(inter.channel, finished_message)
         await inter.response.edit_message(embed=matchmaking_admin_embed(json_data), view=MatchmakingAdminView(json_data))
-        await inter.followup.send(response, ephemeral=True)
+        await send_ephemeral_followup(inter, response)
 
 
 class SettingsAdminView(disnake.ui.View):
@@ -2841,7 +2878,7 @@ class SettingsAdminView(disnake.ui.View):
 
         await inter.response.defer(ephemeral=True)
         message = await configure_leaderboard_channel(channel, interaction_actor(inter))
-        await inter.followup.send(message, ephemeral=True)
+        await send_ephemeral_followup(inter, message)
 
     @disnake.ui.channel_select(placeholder="Set matchmaking channel", channel_types=[disnake.ChannelType.text], custom_id="admin:settings:matchmaking", min_values=1, max_values=1)
     async def matchmaking_channel(self, select: disnake.ui.ChannelSelect, inter: disnake.MessageInteraction):
@@ -2857,7 +2894,7 @@ class SettingsAdminView(disnake.ui.View):
 
         await inter.response.defer(ephemeral=True)
         message = await configure_matchmaking_channel(channel, interaction_actor(inter))
-        await inter.followup.send(message, ephemeral=True)
+        await send_ephemeral_followup(inter, message)
 
     @disnake.ui.button(label="Toggle /add /remove", style=disnake.ButtonStyle.gray, custom_id="admin:settings:leaderboard_chat_commands", row=2)
     async def toggle_leaderboard_chat_commands(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -2931,16 +2968,16 @@ class MatchmakingAdminView(disnake.ui.View):
         await refresh_configured_admin_message(json_data)
         if success and public_matchmaking_announcement(message):
             await send_temporary_public_message(inter.channel, message)
-            await inter.followup.send("Announcement posted publicly and will be deleted in 60 seconds.", ephemeral=True)
+            await send_ephemeral_followup(inter, "Announcement posted publicly and will be deleted in 60 seconds.")
         else:
-            await inter.followup.send(message, ephemeral=True)
+            await send_ephemeral_followup(inter, message)
 
     @disnake.ui.button(label="Configure", style=disnake.ButtonStyle.blurple, custom_id="admin:matchmaking:configure", row=1)
     async def configure(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
         if not await require_admin_interaction(inter):
             return
         json_data = ensure_matchmaking_state(load_json_data())
-        await inter.response.send_message(embed=matchmaking_settings_embed(json_data, admin=True), view=MatchmakingAdminSettingsView(json_data), ephemeral=True)
+        await send_ephemeral_response(inter, embed=matchmaking_settings_embed(json_data, admin=True), view=MatchmakingAdminSettingsView(json_data))
 
 
 class AuditActorSearchModal(disnake.ui.Modal):
@@ -2962,7 +2999,7 @@ class AuditActorSearchModal(disnake.ui.Modal):
 
         actor_query = inter.text_values["actor_query"].strip()
         log_event("operations_audit_actor_search", actor=interaction_actor(inter), status="success", summary=f"Audit actor search requested for {actor_query}.")
-        await inter.response.send_message(embed=audit_logs_embed(title="Audit logs by actor", actor_query=actor_query, limit=15), ephemeral=True)
+        await send_ephemeral_response(inter, embed=audit_logs_embed(title="Audit logs by actor", actor_query=actor_query, limit=15))
 
 
 class AuditCategorySelect(disnake.ui.Select):
@@ -2987,7 +3024,7 @@ class AuditCategorySelect(disnake.ui.Select):
         category = self.values[0]
         label = AUDIT_CATEGORY_LABELS.get(category, category)
         log_event("operations_audit_category_filter", actor=interaction_actor(inter), status="success", summary=f"Audit category filter requested for {label}.")
-        await inter.response.send_message(embed=audit_logs_embed(title=f"{label} audit logs", category=category, limit=15), ephemeral=True)
+        await send_ephemeral_response(inter, embed=audit_logs_embed(title=f"{label} audit logs", category=category, limit=15))
 
 
 class StatusLogsAdminView(disnake.ui.View):
@@ -3010,7 +3047,7 @@ class StatusLogsAdminView(disnake.ui.View):
 
         json_data = ensure_admin_state(load_json_data())
         log_event("operations_health_check", actor=interaction_actor(inter), status="success", summary="Health check requested.")
-        await inter.response.send_message(embed=await operations_health_embed(json_data), ephemeral=True)
+        await send_ephemeral_response(inter, embed=await operations_health_embed(json_data))
 
     @disnake.ui.button(label="Test permissions", style=disnake.ButtonStyle.gray, custom_id="admin:status:permissions", row=0)
     async def test_permissions(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -3020,7 +3057,7 @@ class StatusLogsAdminView(disnake.ui.View):
         json_data = ensure_admin_state(load_json_data())
         embed = await permission_report_embed(inter.guild, json_data)
         log_event("operations_permission_check", actor=interaction_actor(inter), status="success", summary="Permission check requested.")
-        await inter.response.send_message(embed=embed, ephemeral=True)
+        await send_ephemeral_response(inter, embed=embed)
 
     @disnake.ui.button(label="Recreate messages", style=disnake.ButtonStyle.blurple, custom_id="admin:status:recreate_messages", row=1)
     async def recreate_messages(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -3031,7 +3068,7 @@ class StatusLogsAdminView(disnake.ui.View):
         json_data = ensure_admin_state(load_json_data())
         summary = await recreate_persistent_messages(json_data)
         log_event("operations_recreate_messages", actor=interaction_actor(inter), status="success", summary=summary)
-        await inter.followup.send(f"Persistent messages checked/recreated:\n{summary}", ephemeral=True)
+        await send_ephemeral_followup(inter, f"Persistent messages checked/recreated:\n{summary}")
 
     @disnake.ui.button(label="Download data backup", style=disnake.ButtonStyle.gray, custom_id="admin:status:data_backup", row=1)
     async def download_data_backup(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -3039,7 +3076,7 @@ class StatusLogsAdminView(disnake.ui.View):
             return
 
         if not os.path.exists(jsonFile):
-            await inter.response.send_message("No data file exists yet.", ephemeral=True)
+            await send_ephemeral_response(inter, "No data file exists yet.")
             return
 
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -3051,7 +3088,7 @@ class StatusLogsAdminView(disnake.ui.View):
             files.append(disnake.File(AUDIT_LOG_PATH, filename=f"audit-{timestamp}.jsonl"))
 
         log_event("operations_data_backup_download", actor=interaction_actor(inter), status="success", summary="Data backup downloaded.", details={"includedAuditLog": os.path.exists(AUDIT_LOG_PATH)})
-        await inter.response.send_message("Data backup:", files=files, ephemeral=True)
+        await send_ephemeral_response(inter, "Data backup:", files=files)
 
     @disnake.ui.button(label="Force leaderboard refresh", style=disnake.ButtonStyle.red, custom_id="admin:status:force_leaderboard", row=1)
     async def force_refresh_leaderboard(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -3061,14 +3098,14 @@ class StatusLogsAdminView(disnake.ui.View):
         await inter.response.defer(ephemeral=True)
         success, message, json_data = await force_leaderboard_refresh(interaction_actor(inter))
         await refresh_configured_admin_message(json_data)
-        await inter.followup.send(message, ephemeral=True)
+        await send_ephemeral_followup(inter, message)
 
     @disnake.ui.button(label="View recent logs", style=disnake.ButtonStyle.gray, custom_id="admin:status:recent_logs", row=2)
     async def view_recent_logs(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
         if not await require_admin_interaction(inter):
             return
 
-        await inter.response.send_message(embed=recent_logs_embed(), ephemeral=True)
+        await send_ephemeral_response(inter, embed=recent_logs_embed())
 
     @disnake.ui.button(label="Audit summary 24h", style=disnake.ButtonStyle.blurple, custom_id="admin:audit:summary_24h", row=4)
     async def audit_summary_24h(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -3076,7 +3113,7 @@ class StatusLogsAdminView(disnake.ui.View):
             return
 
         log_event("operations_audit_summary_24h", actor=interaction_actor(inter), status="success", summary="Audit summary requested.")
-        await inter.response.send_message(embed=audit_summary_24h_embed(), ephemeral=True)
+        await send_ephemeral_response(inter, embed=audit_summary_24h_embed())
 
     @disnake.ui.button(label="Search actor", style=disnake.ButtonStyle.gray, custom_id="admin:audit:actor_search", row=4)
     async def search_audit_actor(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -3096,7 +3133,7 @@ class AdminView(disnake.ui.View):
             return
 
         json_data = ensure_admin_state(load_json_data())
-        await inter.response.send_message(embed=settings_admin_embed(json_data), view=SettingsAdminView(), ephemeral=True)
+        await send_ephemeral_response(inter, embed=settings_admin_embed(json_data), view=SettingsAdminView())
 
     @disnake.ui.button(label="Leaderboard users", style=disnake.ButtonStyle.green, custom_id="admin:leaderboard")
     async def leaderboard_users(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -3104,7 +3141,7 @@ class AdminView(disnake.ui.View):
             return
 
         json_data = load_json_data()
-        await inter.response.send_message(embed=leaderboard_users_admin_embed(json_data), view=LeaderboardUsersAdminView(json_data), ephemeral=True)
+        await send_ephemeral_response(inter, embed=leaderboard_users_admin_embed(json_data), view=LeaderboardUsersAdminView(json_data))
 
     @disnake.ui.button(label="Linked accounts", style=disnake.ButtonStyle.green, custom_id="admin:links", row=1)
     async def linked_accounts(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -3114,7 +3151,7 @@ class AdminView(disnake.ui.View):
         json_data = ensure_admin_state(load_json_data())
         rebuild_discord_links_from_summoners(json_data)
         writeToJsonFile(jsonFile, json_data)
-        await inter.response.send_message(embed=linked_accounts_admin_embed(json_data), view=LinkedAccountsAdminView(), ephemeral=True)
+        await send_ephemeral_response(inter, embed=linked_accounts_admin_embed(json_data), view=LinkedAccountsAdminView())
 
     @disnake.ui.button(label="Matchmaking", style=disnake.ButtonStyle.gray, custom_id="admin:matchmaking")
     async def matchmaking(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -3122,7 +3159,7 @@ class AdminView(disnake.ui.View):
             return
 
         json_data = ensure_matchmaking_state(load_json_data())
-        await inter.response.send_message(embed=matchmaking_admin_embed(json_data), view=MatchmakingAdminView(json_data), ephemeral=True)
+        await send_ephemeral_response(inter, embed=matchmaking_admin_embed(json_data), view=MatchmakingAdminView(json_data))
 
     @disnake.ui.button(label="Status / Logs", style=disnake.ButtonStyle.blurple, custom_id="admin:status")
     async def status_logs(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -3130,7 +3167,7 @@ class AdminView(disnake.ui.View):
             return
 
         json_data = ensure_admin_state(load_json_data())
-        await inter.response.send_message(embed=status_admin_embed(json_data), view=StatusLogsAdminView(), ephemeral=True)
+        await send_ephemeral_response(inter, embed=status_admin_embed(json_data), view=StatusLogsAdminView())
 
     @disnake.ui.button(label="Refresh", style=disnake.ButtonStyle.gray, custom_id="admin:refresh")
     async def refresh_admin_panel(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -3140,7 +3177,7 @@ class AdminView(disnake.ui.View):
         json_data = ensure_admin_state(load_json_data())
         await refresh_configured_matchmaking_message(json_data)
         await refresh_configured_admin_message(json_data)
-        await inter.response.send_message("Administration refreshed.", ephemeral=True)
+        await send_ephemeral_response(inter, "Administration refreshed.")
 
 
 def settings_admin_embed(json_data):
@@ -3543,13 +3580,19 @@ if __name__ == "__main__":
                 "Ask an admin to link one from the administration panel or with /linkdiscord."
             )
             log_event("personal_report_view", actor=interaction_actor(inter), status="error", summary=message, details={"targetUserId": str(target.id)})
-            await inter.send(message, ephemeral=private)
+            if private:
+                await send_ephemeral_inter_send(inter, message)
+            else:
+                await inter.send(message)
             return
 
         log_event("personal_report_view", actor=interaction_actor(inter), status="success", summary=f"Cached personal report viewed for {target.display_name}.", details={"targetUserId": str(target.id)})
         summoner_name = primary_summoner_for_user(json_data, target.id)
         view = personal_report_view(json_data, summoner_name) if summoner_name else None
-        await inter.send(embed=embed, view=view, ephemeral=private)
+        if private:
+            await send_ephemeral_inter_send(inter, embed=embed, view=view)
+        else:
+            await inter.send(embed=embed, view=view)
 
 
     @bot.slash_command(description="Patch notes")
@@ -3577,70 +3620,70 @@ if __name__ == "__main__":
         await inter.response.defer(ephemeral=True)
         message_id = await setup_matchmaking_message()
         if message_id:
-            await inter.send(f"Matchmaking message ready: {message_id}", ephemeral=True)
+            await send_ephemeral_inter_send(inter, f"Matchmaking message ready: {message_id}")
         else:
-            await inter.send("Could not create the matchmaking message. Check the configured channel and bot permissions.", ephemeral=True)
+            await send_ephemeral_inter_send(inter, "Could not create the matchmaking message. Check the configured channel and bot permissions.")
 
 
     @bot.slash_command(description="Create or move the administration message")
     async def setup(inter: ApplicationCommandInteraction, channel: disnake.TextChannel):
         await inter.response.defer(ephemeral=True)
         if not inter.guild:
-            await inter.send("This command can only be used inside a server.", ephemeral=True)
+            await send_ephemeral_inter_send(inter, "This command can only be used inside a server.")
             return
         if not can_configure_channels(inter):
-            await inter.send("You need Manage Server permission to set up administration.", ephemeral=True)
+            await send_ephemeral_inter_send(inter, "You need Manage Server permission to set up administration.")
             return
 
         bot_member = inter.guild.me or await get_guild_member(inter.guild, bot.user.id)
         missing_permissions = missing_bot_channel_permissions(channel, bot_member)
         if missing_permissions:
-            await inter.send(f"I am missing permissions in {channel.mention}: {', '.join(missing_permissions)}.", ephemeral=True)
+            await send_ephemeral_inter_send(inter, f"I am missing permissions in {channel.mention}: {', '.join(missing_permissions)}.")
             return
 
         message_id = await setup_admin_message(channel)
         log_event("admin_setup", actor=interaction_actor(inter), status="success", summary=f"Administration channel set to {channel.mention}.", details={"channelId": str(channel.id), "messageId": str(message_id)})
-        await inter.send(f"Administration channel set to {channel.mention}. Message ready: {message_id}", ephemeral=True)
+        await send_ephemeral_inter_send(inter, f"Administration channel set to {channel.mention}. Message ready: {message_id}")
 
 
     @bot.slash_command(description="Set the channel for the editable leaderboard message")
     async def setrankingchannel(inter: ApplicationCommandInteraction, channel: disnake.TextChannel):
         await inter.response.defer(ephemeral=True)
         if not inter.guild:
-            await inter.send("This command can only be used inside a server.", ephemeral=True)
+            await send_ephemeral_inter_send(inter, "This command can only be used inside a server.")
             return
         if not can_configure_channels(inter):
-            await inter.send("You need Manage Server permission to change bot channels.", ephemeral=True)
+            await send_ephemeral_inter_send(inter, "You need Manage Server permission to change bot channels.")
             return
 
         bot_member = inter.guild.me or await get_guild_member(inter.guild, bot.user.id)
         missing_permissions = missing_bot_channel_permissions(channel, bot_member)
         if missing_permissions:
-            await inter.send(f"I am missing permissions in {channel.mention}: {', '.join(missing_permissions)}.", ephemeral=True)
+            await send_ephemeral_inter_send(inter, f"I am missing permissions in {channel.mention}: {', '.join(missing_permissions)}.")
             return
 
         message = await configure_leaderboard_channel(channel, interaction_actor(inter))
-        await inter.send(message, ephemeral=True)
+        await send_ephemeral_inter_send(inter, message)
 
 
     @bot.slash_command(description="Set the channel for the matchmaking message")
     async def setmatchmakingchannel(inter: ApplicationCommandInteraction, channel: disnake.TextChannel):
         await inter.response.defer(ephemeral=True)
         if not inter.guild:
-            await inter.send("This command can only be used inside a server.", ephemeral=True)
+            await send_ephemeral_inter_send(inter, "This command can only be used inside a server.")
             return
         if not can_configure_channels(inter):
-            await inter.send("You need Manage Server permission to change bot channels.", ephemeral=True)
+            await send_ephemeral_inter_send(inter, "You need Manage Server permission to change bot channels.")
             return
 
         bot_member = inter.guild.me or await get_guild_member(inter.guild, bot.user.id)
         missing_permissions = missing_bot_channel_permissions(channel, bot_member)
         if missing_permissions:
-            await inter.send(f"I am missing permissions in {channel.mention}: {', '.join(missing_permissions)}.", ephemeral=True)
+            await send_ephemeral_inter_send(inter, f"I am missing permissions in {channel.mention}: {', '.join(missing_permissions)}.")
             return
 
         message = await configure_matchmaking_channel(channel, interaction_actor(inter))
-        await inter.send(message, ephemeral=True)
+        await send_ephemeral_inter_send(inter, message)
 
 
     @bot.slash_command(description="Link a leaderboard summoner to a Discord user")
@@ -3654,14 +3697,14 @@ if __name__ == "__main__":
         if not summoner:
             message = f"{name}#{normalize_tagline(tagline)} has not been added"
             log_event("discord_link_created", actor=interaction_actor(inter), status="error", summary=message, details={"discordUserId": str(user.id)})
-            await inter.send(message, ephemeral=True)
+            await send_ephemeral_inter_send(inter, message)
             return
 
         success, message = link_summoner_to_discord(json_data, user, summoner, primary)
         writeToJsonFile(jsonFile, json_data)
         log_event("discord_link_created", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"discordUserId": str(user.id), "summoner": summoner, "primary": primary})
         await refresh_configured_admin_message(json_data)
-        await inter.send(message, ephemeral=True)
+        await send_ephemeral_inter_send(inter, message)
 
 
     @bot.slash_command(description="Unlink a leaderboard summoner from Discord")
@@ -3675,14 +3718,14 @@ if __name__ == "__main__":
         if not summoner:
             message = f"{name}#{normalize_tagline(tagline)} has not been added"
             log_event("discord_link_removed", actor=interaction_actor(inter), status="error", summary=message)
-            await inter.send(message, ephemeral=True)
+            await send_ephemeral_inter_send(inter, message)
             return
 
         success, message = unlink_summoner_from_discord(json_data, summoner)
         writeToJsonFile(jsonFile, json_data)
         log_event("discord_link_removed", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"summoner": summoner})
         await refresh_configured_admin_message(json_data)
-        await inter.send(message, ephemeral=True)
+        await send_ephemeral_inter_send(inter, message)
 
 
     @bot.slash_command(description="Set the primary summoner for a linked Discord user")
@@ -3696,14 +3739,14 @@ if __name__ == "__main__":
         if not summoner:
             message = f"{name}#{normalize_tagline(tagline)} has not been added"
             log_event("discord_link_primary_changed", actor=interaction_actor(inter), status="error", summary=message, details={"discordUserId": str(user.id)})
-            await inter.send(message, ephemeral=True)
+            await send_ephemeral_inter_send(inter, message)
             return
 
         success, message = set_primary_summoner_for_user(json_data, user, summoner)
         writeToJsonFile(jsonFile, json_data)
         log_event("discord_link_primary_changed", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"discordUserId": str(user.id), "summoner": summoner})
         await refresh_configured_admin_message(json_data)
-        await inter.send(message, ephemeral=True)
+        await send_ephemeral_inter_send(inter, message)
 
 
     @bot.slash_command(description="Add summoner to the list")
@@ -3713,13 +3756,13 @@ if __name__ == "__main__":
         if not leaderboard_chat_commands_enabled(json_data):
             message = "/add is disabled from App settings. Use the administration panel or enable the chat commands there."
             log_event("leaderboard_summoner_add", actor=interaction_actor(inter), status="error", summary=message, details={"name": name, "tagline": tagline, "platform": platform, "region": region})
-            await inter.send(message, ephemeral=True)
+            await send_ephemeral_inter_send(inter, message)
             return
 
         success, message = await add_summoner_to_data(name, tagline, platform, region)
         log_event("leaderboard_summoner_add", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"name": name, "tagline": tagline, "platform": platform, "region": region})
         await refresh_configured_admin_message()
-        await inter.send(message, ephemeral=True)
+        await send_ephemeral_inter_send(inter, message)
 
 
     @bot.slash_command(description="Remove summoner from the list")
@@ -3729,13 +3772,13 @@ if __name__ == "__main__":
         if not leaderboard_chat_commands_enabled(json_data):
             message = "/remove is disabled from App settings. Use the administration panel or enable the chat commands there."
             log_event("leaderboard_summoner_remove", actor=interaction_actor(inter), status="error", summary=message, details={"name": name, "tagline": tagline})
-            await inter.send(message, ephemeral=True)
+            await send_ephemeral_inter_send(inter, message)
             return
 
         success, message = remove_summoner_from_data(name, tagline)
         log_event("leaderboard_summoner_remove", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"name": name, "tagline": tagline})
         await refresh_configured_admin_message()
-        await inter.send(message, ephemeral=True)
+        await send_ephemeral_inter_send(inter, message)
 
     if not discordToken:
         raise RuntimeError("DISCORD_TOKEN is not configured.")
