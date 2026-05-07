@@ -2442,9 +2442,69 @@ class MatchmakingAdminSettingsView(disnake.ui.View):
         self.add_item(AdminOddPolicySelect(json_data))
 
 
-class MatchmakingView(disnake.ui.View):
+class CaptainPickButton(disnake.ui.Button):
     def __init__(self):
+        super().__init__(
+            label="Pick player",
+            style=disnake.ButtonStyle.green,
+            custom_id="matchmaking:captains:pick",
+            row=1
+        )
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        json_data = ensure_matchmaking_state(load_json_data())
+        draft = json_data.get("matchmakingDraft")
+        if not draft:
+            await inter.response.send_message("No captain draft is currently active.", ephemeral=True)
+            return
+        if str(draft.get("turnCaptainId")) != str(inter.author.id):
+            await inter.response.send_message("It is not your turn to pick.", ephemeral=True)
+            return
+        by_id = players_by_id(json_data.get("matchmakingQueue", []))
+        available_remaining = [user_id for user_id in [str(value) for value in draft.get("remainingPlayerIds", [])] if user_id in by_id]
+        if not available_remaining:
+            await inter.response.send_message("There are no players left to pick.", ephemeral=True)
+            return
+        await inter.response.send_message("Choose a player for your team.", view=CaptainPickView(json_data), ephemeral=True)
+
+
+class StartMatchButton(disnake.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="Start match",
+            style=disnake.ButtonStyle.gray,
+            custom_id="matchmaking:start",
+            row=1
+        )
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        await inter.response.defer(ephemeral=True)
+        json_data = ensure_matchmaking_state(load_json_data())
+        queue = await active_matchmaking_queue(inter.guild, json_data)
+        if user_queue_index(queue, inter.author.id) is None:
+            writeToJsonFile(jsonFile, json_data)
+            await refresh_configured_matchmaking_message(json_data)
+            await refresh_configured_admin_message(json_data)
+            await inter.followup.send("Only queued players can start matchmaking.", ephemeral=True)
+            return
+
+        success, message, json_data = await start_matchmaking_queue(inter.guild, json_data, inter.author.id)
+        await refresh_configured_matchmaking_message(json_data)
+        await refresh_configured_admin_message(json_data)
+        log_event("matchmaking_start", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"mode": effective_matchmaking_team_mode(json_data)})
+        await inter.followup.send(message, ephemeral=True)
+
+
+class MatchmakingView(disnake.ui.View):
+    def __init__(self, json_data=None):
         super().__init__(timeout=None)
+        json_data = ensure_matchmaking_state(json_data or load_json_data())
+        draft = json_data.get("matchmakingDraft")
+        queue = json_data.get("matchmakingQueue", [])
+        if draft and draft.get("remainingPlayerIds"):
+            self.add_item(CaptainPickButton())
+        elif not draft and len(queue) >= 2:
+            self.add_item(StartMatchButton())
 
     @disnake.ui.button(label="Join", style=disnake.ButtonStyle.green, custom_id="matchmaking:join")
     async def join(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -2519,41 +2579,6 @@ class MatchmakingView(disnake.ui.View):
             await inter.response.send_message("Only queued players can open matchmaking settings.", ephemeral=True)
             return
         await inter.response.send_message(embed=matchmaking_settings_embed(json_data), view=MatchmakingSettingsView(inter.author.id, json_data), ephemeral=True)
-
-    @disnake.ui.button(label="Pick player", style=disnake.ButtonStyle.green, custom_id="matchmaking:captains:pick")
-    async def pick_player(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
-        json_data = ensure_matchmaking_state(load_json_data())
-        draft = json_data.get("matchmakingDraft")
-        if not draft:
-            await inter.response.send_message("No captain draft is currently active.", ephemeral=True)
-            return
-        if str(draft.get("turnCaptainId")) != str(inter.author.id):
-            await inter.response.send_message("It is not your turn to pick.", ephemeral=True)
-            return
-        by_id = players_by_id(json_data.get("matchmakingQueue", []))
-        available_remaining = [user_id for user_id in [str(value) for value in draft.get("remainingPlayerIds", [])] if user_id in by_id]
-        if not available_remaining:
-            await inter.response.send_message("There are no players left to pick.", ephemeral=True)
-            return
-        await inter.response.send_message("Choose a player for your team.", view=CaptainPickView(json_data), ephemeral=True)
-
-    @disnake.ui.button(label="Start match", style=disnake.ButtonStyle.gray, custom_id="matchmaking:start")
-    async def start_match(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
-        await inter.response.defer(ephemeral=True)
-        json_data = ensure_matchmaking_state(load_json_data())
-        queue = await active_matchmaking_queue(inter.guild, json_data)
-        if user_queue_index(queue, inter.author.id) is None:
-            writeToJsonFile(jsonFile, json_data)
-            await refresh_configured_matchmaking_message(json_data)
-            await refresh_configured_admin_message(json_data)
-            await inter.followup.send("Only queued players can start matchmaking.", ephemeral=True)
-            return
-
-        success, message, json_data = await start_matchmaking_queue(inter.guild, json_data, inter.author.id)
-        await refresh_configured_matchmaking_message(json_data)
-        await refresh_configured_admin_message(json_data)
-        log_event("matchmaking_start", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"mode": effective_matchmaking_team_mode(json_data)})
-        await inter.followup.send(message, ephemeral=True)
 
 
 class AddSummonerModal(disnake.ui.Modal):
@@ -3145,7 +3170,7 @@ def matchmaking_admin_embed(json_data):
 async def refresh_matchmaking_message(channel, json_data=None):
     json_data = ensure_matchmaking_state(json_data or load_json_data())
     embed = matchmaking_embed(json_data)
-    view = MatchmakingView()
+    view = MatchmakingView(json_data)
     message_id = json_data.get("matchmakingMessageId")
 
     if message_id:
