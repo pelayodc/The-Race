@@ -1,6 +1,7 @@
 import math
 import os
 import random
+import asyncio
 from io import BytesIO
 from itertools import combinations
 from types import SimpleNamespace
@@ -258,6 +259,29 @@ async def send_ephemeral(inter, message=None, embed=None, view=None):
         await inter.followup.send(message, embed=embed, view=view, ephemeral=True)
     else:
         await inter.response.send_message(message, embed=embed, view=view, ephemeral=True)
+
+
+async def delete_message_later(message, delay_seconds=60):
+    await asyncio.sleep(delay_seconds)
+    try:
+        await message.delete()
+    except (disnake.NotFound, disnake.Forbidden, disnake.HTTPException):
+        pass
+
+
+async def send_temporary_public_message(channel, message, delay_seconds=60):
+    if not channel or not message:
+        return None
+    try:
+        sent_message = await channel.send(message)
+    except (disnake.Forbidden, disnake.HTTPException):
+        return None
+    asyncio.create_task(delete_message_later(sent_message, delay_seconds))
+    return sent_message
+
+
+def public_matchmaking_announcement(message):
+    return bool(message and (message.startswith("Match started") or message.startswith("Captain draft started")))
 
 
 async def require_admin_interaction(inter):
@@ -2207,7 +2231,11 @@ class CaptainPickSelect(disnake.ui.Select):
         await refresh_configured_matchmaking_message(json_data)
         await refresh_configured_admin_message(json_data)
         log_event("matchmaking_captain_pick", actor=interaction_actor(inter), status="success", summary=message, details={"pickedUserId": str(self.values[0]), "finished": finished})
-        await inter.followup.send(f"{message}\n{finish_message or 'Waiting for the next captain pick.'}", ephemeral=True)
+        if finished and finish_message:
+            await send_temporary_public_message(inter.channel, finish_message)
+            await inter.followup.send(f"{message}\nTeams announced publicly and will be deleted in 60 seconds.", ephemeral=True)
+        else:
+            await inter.followup.send(f"{message}\nWaiting for the next captain pick.", ephemeral=True)
 
 
 class CaptainPickView(disnake.ui.View):
@@ -2492,7 +2520,11 @@ class StartMatchButton(disnake.ui.Button):
         await refresh_configured_matchmaking_message(json_data)
         await refresh_configured_admin_message(json_data)
         log_event("matchmaking_start", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"mode": effective_matchmaking_team_mode(json_data)})
-        await inter.followup.send(message, ephemeral=True)
+        if success and public_matchmaking_announcement(message):
+            await send_temporary_public_message(inter.channel, message)
+            await inter.followup.send("Announcement posted publicly and will be deleted in 60 seconds.", ephemeral=True)
+        else:
+            await inter.followup.send(message, ephemeral=True)
 
 
 class MatchmakingView(disnake.ui.View):
@@ -2562,13 +2594,18 @@ class MatchmakingView(disnake.ui.View):
             writeToJsonFile(jsonFile, json_data)
         await refresh_configured_matchmaking_message(json_data)
         await refresh_configured_admin_message(json_data)
+        if finished_message:
+            await send_temporary_public_message(inter.channel, finished_message)
         log_event("matchmaking_leave", actor=interaction_actor(inter), status="success", summary="User left matchmaking queue.")
         if draft_cancelled:
             log_event("matchmaking_captain_draft_cancelled", actor=interaction_actor(inter), status="error", summary="Captain draft cancelled because a captain left the queue.")
             await inter.followup.send("You left the matchmaking queue. Captain draft cancelled.", ephemeral=True)
         elif draft_changed:
             log_event("matchmaking_captain_draft_player_removed", actor=interaction_actor(inter), status="success", summary="User left active captain draft.")
-            await inter.followup.send(f"You left the matchmaking queue and were removed from the captain draft.\n{finished_message or ''}".strip(), ephemeral=True)
+            message = "You left the matchmaking queue and were removed from the captain draft."
+            if finished_message:
+                message += "\nTeams announced publicly and will be deleted in 60 seconds."
+            await inter.followup.send(message, ephemeral=True)
         else:
             await inter.followup.send("You left the matchmaking queue.", ephemeral=True)
 
@@ -2776,10 +2813,12 @@ class QueueRemoveSelect(disnake.ui.Select):
         if draft_cancelled:
             response += " Captain draft cancelled."
         elif draft_changed and finished_message:
-            response += f"\n{finished_message}"
+            response += "\nTeams announced publicly and will be deleted in 60 seconds."
         log_event("matchmaking_queue_kick", actor=interaction_actor(inter), status="success" if removed else "error", summary=response, details={"userId": str(user_id)})
         await refresh_configured_matchmaking_message(json_data)
         await refresh_configured_admin_message(json_data)
+        if finished_message:
+            await send_temporary_public_message(inter.channel, finished_message)
         await inter.response.edit_message(embed=matchmaking_admin_embed(json_data), view=MatchmakingAdminView(json_data))
         await inter.followup.send(response, ephemeral=True)
 
@@ -2890,7 +2929,11 @@ class MatchmakingAdminView(disnake.ui.View):
         log_event("matchmaking_force_start", actor=interaction_actor(inter), status="success" if success else "error", summary=message)
         await refresh_configured_matchmaking_message(json_data)
         await refresh_configured_admin_message(json_data)
-        await inter.followup.send(message, ephemeral=True)
+        if success and public_matchmaking_announcement(message):
+            await send_temporary_public_message(inter.channel, message)
+            await inter.followup.send("Announcement posted publicly and will be deleted in 60 seconds.", ephemeral=True)
+        else:
+            await inter.followup.send(message, ephemeral=True)
 
     @disnake.ui.button(label="Configure", style=disnake.ButtonStyle.blurple, custom_id="admin:matchmaking:configure", row=1)
     async def configure(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -3316,6 +3359,8 @@ async def process_captain_draft_timeout():
     writeToJsonFile(jsonFile, json_data)
     await refresh_configured_matchmaking_message(json_data)
     await refresh_configured_admin_message(json_data)
+    if finished and finish_message and channel:
+        await send_temporary_public_message(channel, finish_message)
     log_event("matchmaking_captain_autopick", actor=system_actor(), status="success", summary=finish_message or message, details={"pickedUserId": str(picked_player["userId"]), "finished": finished})
 
 
@@ -3376,6 +3421,8 @@ if __name__ == "__main__":
             channel = await get_discord_channel(matchmaking_channel_id(json_data))
             if channel:
                 await refresh_matchmaking_message(channel, json_data)
+                if message:
+                    await send_temporary_public_message(channel, message)
             await refresh_configured_admin_message(json_data)
 
         await delete_empty_matchmaking_team_channels(member.guild)
