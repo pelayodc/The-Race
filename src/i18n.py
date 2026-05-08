@@ -7,6 +7,9 @@ LOCALES_DIR = Path(__file__).parent / "locales"
 LANGUAGE_LABELS = {
     "en": "English",
     "es": "Español",
+    "pt": "Português",
+    "it": "Italiano",
+    "fr": "Français",
 }
 
 _translations = None
