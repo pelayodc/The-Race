@@ -350,6 +350,7 @@ def ensure_matchmaking_state(json_data):
 def ensure_admin_state(json_data):
     ensure_matchmaking_state(json_data)
     json_data.setdefault("discordLinks", {})
+    json_data.setdefault("discordLinkRequests", [])
     json_data.setdefault("leaderboardChatCommandsEnabled", False)
     json_data.setdefault("adminMessageId", None)
     json_data.setdefault("leaderboardLastUpdateAt", None)
@@ -763,6 +764,10 @@ def link_summoner_to_discord(json_data, user, summoner_full_name, primary=True):
     else:
         summoners[summoner_full_name]["discordPrimary"] = False
 
+    json_data["discordLinkRequests"] = [
+        request for request in (json_data.get("discordLinkRequests") or [])
+        if not isinstance(request, dict) or request.get("summonerFullName") != summoner_full_name
+    ]
     return True, f"{summoner_full_name} linked to <@{user_id}>"
 
 
@@ -807,6 +812,104 @@ def set_primary_summoner_for_user(json_data, user, summoner_full_name):
     link["displayName"] = user.display_name
     link["primarySummoner"] = summoner_full_name
     return True, f"{summoner_full_name} set as primary for <@{user_id}>"
+
+
+def discord_display_name(user):
+    return getattr(user, "display_name", None) or getattr(user, "name", None) or str(user.id)
+
+
+def discord_link_request_id(user_id, summoner_full_name):
+    return f"{user_id}:{summoner_full_name.lower()}"
+
+
+def discord_link_requests(json_data):
+    ensure_admin_state(json_data)
+    requests = []
+    seen = set()
+    summoners = json_data.get("summoners") or {}
+    for request in json_data.get("discordLinkRequests") or []:
+        if not isinstance(request, dict):
+            continue
+        user_id = str(request.get("discordUserId") or "")
+        summoner = request.get("summonerFullName")
+        if not user_id or summoner not in summoners:
+            continue
+        if summoners[summoner].get("discordUserId"):
+            continue
+        request_id = request.get("id") or discord_link_request_id(user_id, summoner)
+        if request_id in seen:
+            continue
+        request["id"] = request_id
+        request["discordUserId"] = user_id
+        request["summonerFullName"] = summoner
+        request.setdefault("discordDisplayName", user_id)
+        request.setdefault("requestedAt", utc_now_iso())
+        requests.append(request)
+        seen.add(request_id)
+    json_data["discordLinkRequests"] = requests
+    return requests
+
+
+def find_discord_link_request(json_data, request_id):
+    for request in discord_link_requests(json_data):
+        if request.get("id") == request_id:
+            return request
+    return None
+
+
+def remove_discord_link_request(json_data, request_id):
+    requests = discord_link_requests(json_data)
+    before = len(requests)
+    json_data["discordLinkRequests"] = [request for request in requests if request.get("id") != request_id]
+    return len(json_data["discordLinkRequests"]) != before
+
+
+def request_discord_link(json_data, user, summoner_full_name):
+    ensure_admin_state(json_data)
+    rebuild_discord_links_from_summoners(json_data)
+    summoners = json_data.get("summoners") or {}
+    if summoner_full_name not in summoners:
+        return False, f"{summoner_full_name} has not been added"
+
+    user_id = str(user.id)
+    current_user_id = summoners[summoner_full_name].get("discordUserId")
+    if current_user_id and str(current_user_id) == user_id:
+        return False, f"{summoner_full_name} is already linked to your Discord."
+    if current_user_id:
+        return False, f"{summoner_full_name} is already linked to <@{current_user_id}>."
+
+    requests = discord_link_requests(json_data)
+    request_id = discord_link_request_id(user_id, summoner_full_name)
+    for request in requests:
+        if request.get("summonerFullName", "").lower() != summoner_full_name.lower():
+            continue
+        if request.get("discordUserId") == user_id:
+            request["discordDisplayName"] = discord_display_name(user)
+            request["requestedAt"] = utc_now_iso()
+            return True, f"Your link request for {summoner_full_name} was refreshed. An admin must approve it."
+        return False, f"{summoner_full_name} already has a pending link request."
+
+    requests.append({
+        "id": request_id,
+        "discordUserId": user_id,
+        "discordDisplayName": discord_display_name(user),
+        "summonerFullName": summoner_full_name,
+        "requestedAt": utc_now_iso()
+    })
+    json_data["discordLinkRequests"] = requests
+    return True, f"Your link request for {summoner_full_name} was sent. An admin must approve it."
+
+
+def approve_discord_link_request(json_data, request_id, user):
+    request = find_discord_link_request(json_data, request_id)
+    if not request:
+        return False, "That link request is no longer pending."
+
+    primary = not bool(linked_summoners_for_user(json_data, user.id))
+    success, message = link_summoner_to_discord(json_data, user, request["summonerFullName"], primary=primary)
+    if success:
+        remove_discord_link_request(json_data, request_id)
+    return success, message
 
 
 def primary_summoner_queue_data(json_data, user_id):
@@ -1446,6 +1549,22 @@ def format_linked_accounts_summary(json_data):
         lines.append(f"<@{user_id}> - {count} account(s), primary: **{primary}**")
     if len(links) > 10:
         lines.append(f"...and {len(links) - 10} more.")
+    return "\n".join(lines)
+
+
+def format_discord_link_requests_summary(json_data):
+    requests = discord_link_requests(json_data)
+    if not requests:
+        return "No pending link requests."
+
+    lines = []
+    for request in requests[:10]:
+        user_id = request.get("discordUserId")
+        summoner = request.get("summonerFullName")
+        display_name = request.get("discordDisplayName") or user_id
+        lines.append(f"<@{user_id}> ({display_name}) - **{summoner}**")
+    if len(requests) > 10:
+        lines.append(f"...and {len(requests) - 10} more.")
     return "\n".join(lines)
 
 
@@ -2929,9 +3048,93 @@ class LeaderboardUsersAdminView(disnake.ui.View):
         await inter.response.send_modal(AddSummonerModal())
 
 
+def link_request_select_options(requests):
+    options = []
+    for request in requests[:MAX_SELECT_OPTIONS]:
+        user_id = request.get("discordUserId")
+        summoner = request.get("summonerFullName") or "Unknown summoner"
+        display_name = request.get("discordDisplayName") or user_id
+        label = f"{display_name} - {summoner}"[:100]
+        options.append(disnake.SelectOption(label=label, value=request["id"], description=f"Discord ID: {user_id}"[:100]))
+    return options
+
+
+class ApproveLinkRequestSelect(disnake.ui.Select):
+    def __init__(self, requests):
+        super().__init__(
+            placeholder="Accept a pending link request",
+            min_values=1,
+            max_values=1,
+            options=link_request_select_options(requests),
+            custom_id="admin:links:request_accept",
+            row=1
+        )
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        json_data = ensure_admin_state(load_json_data())
+        request_id = self.values[0]
+        request = find_discord_link_request(json_data, request_id)
+        if not request:
+            await inter.response.edit_message(embed=linked_accounts_admin_embed(json_data), view=LinkedAccountsAdminView(json_data))
+            await send_ephemeral_followup(inter, "That link request is no longer pending.")
+            return
+
+        member = await get_guild_member(inter.guild, request["discordUserId"])
+        if not member:
+            await inter.response.edit_message(embed=linked_accounts_admin_embed(json_data), view=LinkedAccountsAdminView(json_data))
+            await send_ephemeral_followup(inter, "Could not find that Discord user in this server. The request was kept pending.")
+            return
+
+        success, message = approve_discord_link_request(json_data, request_id, member)
+        if success:
+            writeToJsonFile(jsonFile, json_data)
+            await refresh_configured_admin_message(json_data)
+        log_event("discord_link_request_accepted", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"requestId": request_id, "discordUserId": request["discordUserId"], "summoner": request["summonerFullName"]})
+        await inter.response.edit_message(embed=linked_accounts_admin_embed(json_data), view=LinkedAccountsAdminView(json_data))
+        await send_ephemeral_followup(inter, message)
+
+
+class RejectLinkRequestSelect(disnake.ui.Select):
+    def __init__(self, requests):
+        super().__init__(
+            placeholder="Reject a pending link request",
+            min_values=1,
+            max_values=1,
+            options=link_request_select_options(requests),
+            custom_id="admin:links:request_reject",
+            row=2
+        )
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        json_data = ensure_admin_state(load_json_data())
+        request_id = self.values[0]
+        request = find_discord_link_request(json_data, request_id)
+        removed = remove_discord_link_request(json_data, request_id)
+        if removed:
+            writeToJsonFile(jsonFile, json_data)
+            await refresh_configured_admin_message(json_data)
+        summoner = request.get("summonerFullName") if request else None
+        message = f"Rejected link request for {summoner}." if removed else "That link request is no longer pending."
+        log_event("discord_link_request_rejected", actor=interaction_actor(inter), status="success" if removed else "error", summary=message, details={"requestId": request_id, "summoner": summoner})
+        await inter.response.edit_message(embed=linked_accounts_admin_embed(json_data), view=LinkedAccountsAdminView(json_data))
+        await send_ephemeral_followup(inter, message)
+
+
 class LinkedAccountsAdminView(disnake.ui.View):
-    def __init__(self):
+    def __init__(self, json_data=None):
         super().__init__(timeout=300)
+        if json_data is None:
+            json_data = ensure_admin_state(load_json_data())
+        requests = discord_link_requests(json_data)
+        if requests:
+            self.add_item(ApproveLinkRequestSelect(requests))
+            self.add_item(RejectLinkRequestSelect(requests))
 
     @disnake.ui.button(label="Link account", style=disnake.ButtonStyle.green, custom_id="admin:links:link")
     async def link_account(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -3160,7 +3363,7 @@ class AdminView(disnake.ui.View):
         json_data = ensure_admin_state(load_json_data())
         rebuild_discord_links_from_summoners(json_data)
         writeToJsonFile(jsonFile, json_data)
-        await send_ephemeral_response(inter, embed=linked_accounts_admin_embed(json_data), view=LinkedAccountsAdminView())
+        await send_ephemeral_response(inter, embed=linked_accounts_admin_embed(json_data), view=LinkedAccountsAdminView(json_data))
 
     @disnake.ui.button(label="Matchmaking", style=disnake.ButtonStyle.gray, custom_id="admin:matchmaking")
     async def matchmaking(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -3219,6 +3422,7 @@ def leaderboard_users_admin_embed(json_data):
 def linked_accounts_admin_embed(json_data):
     rebuild_discord_links_from_summoners(json_data)
     links = json_data.get("discordLinks", {})
+    requests = discord_link_requests(json_data)
     linked_summoners = [
         summoner for summoner, data in (json_data.get("summoners") or {}).items()
         if data.get("discordUserId")
@@ -3226,10 +3430,15 @@ def linked_accounts_admin_embed(json_data):
 
     embed = disnake.Embed(
         title="Linked accounts",
-        description=f"Linked Discord users: **{len(links)}**\nLinked summoners: **{len(linked_summoners)}**",
+        description=(
+            f"Linked Discord users: **{len(links)}**\n"
+            f"Linked summoners: **{len(linked_summoners)}**\n"
+            f"Pending requests: **{len(requests)}**"
+        ),
         colour=disnake.Colour.green()
     )
     embed.add_field(name="Current links", value=format_linked_accounts_summary(json_data), inline=False)
+    embed.add_field(name="Pending requests", value=format_discord_link_requests_summary(json_data), inline=False)
     return embed
 
 
@@ -3586,7 +3795,7 @@ if __name__ == "__main__":
         if not embed:
             message = (
                 f"{target.mention} does not have a linked leaderboard account yet. "
-                "Ask an admin to link one from the administration panel or with /linkdiscord."
+                "Use /link_discord to request a link, or ask an admin to link one from the administration panel."
             )
             log_event("personal_report_view", actor=interaction_actor(inter), status="error", summary=message, details={"targetUserId": str(target.id)})
             if private:
@@ -3624,7 +3833,7 @@ if __name__ == "__main__":
             await inter.send("Could not fetch the latest patch notes.")
 
 
-    @bot.slash_command(description="Create or refresh the matchmaking message")
+    @bot.slash_command(name="admin_matchmaking", description="Create or refresh the matchmaking message")
     async def matchmaking(inter: ApplicationCommandInteraction):
         await inter.response.defer(ephemeral=True)
         message_id = await setup_matchmaking_message()
@@ -3634,7 +3843,7 @@ if __name__ == "__main__":
             await send_ephemeral_inter_send(inter, "Could not create the matchmaking message. Check the configured channel and bot permissions.")
 
 
-    @bot.slash_command(description="Create or move the administration message")
+    @bot.slash_command(name="admin_setup", description="Create or move the administration message")
     async def setup(inter: ApplicationCommandInteraction, channel: disnake.TextChannel):
         await inter.response.defer(ephemeral=True)
         if not inter.guild:
@@ -3655,7 +3864,7 @@ if __name__ == "__main__":
         await send_ephemeral_inter_send(inter, f"Administration channel set to {channel.mention}. Message ready: {message_id}")
 
 
-    @bot.slash_command(description="Set the channel for the editable leaderboard message")
+    @bot.slash_command(name="admin_set_ranking_channel", description="Set the channel for the editable leaderboard message")
     async def setrankingchannel(inter: ApplicationCommandInteraction, channel: disnake.TextChannel):
         await inter.response.defer(ephemeral=True)
         if not inter.guild:
@@ -3675,7 +3884,7 @@ if __name__ == "__main__":
         await send_ephemeral_inter_send(inter, message)
 
 
-    @bot.slash_command(description="Set the channel for the matchmaking message")
+    @bot.slash_command(name="admin_set_matchmaking_channel", description="Set the channel for the matchmaking message")
     async def setmatchmakingchannel(inter: ApplicationCommandInteraction, channel: disnake.TextChannel):
         await inter.response.defer(ephemeral=True)
         if not inter.guild:
@@ -3695,7 +3904,26 @@ if __name__ == "__main__":
         await send_ephemeral_inter_send(inter, message)
 
 
-    @bot.slash_command(description="Link a leaderboard summoner to a Discord user")
+    @bot.slash_command(name="link_discord", description="Request linking your Discord to a leaderboard summoner")
+    async def link_discord(inter: ApplicationCommandInteraction, name: str, tagline: str):
+        await inter.response.defer(ephemeral=True)
+        json_data = ensure_admin_state(load_json_data())
+        summoner = find_summoner_key(json_data, name, tagline)
+        if not summoner:
+            message = f"{name}#{normalize_tagline(tagline)} has not been added"
+            log_event("discord_link_request_created", actor=interaction_actor(inter), status="error", summary=message, details={"discordUserId": str(inter.author.id)})
+            await send_ephemeral_inter_send(inter, message)
+            return
+
+        success, message = request_discord_link(json_data, inter.author, summoner)
+        if success:
+            writeToJsonFile(jsonFile, json_data)
+            await refresh_configured_admin_message(json_data)
+        log_event("discord_link_request_created", actor=interaction_actor(inter), status="success" if success else "error", summary=message, details={"discordUserId": str(inter.author.id), "summoner": summoner})
+        await send_ephemeral_inter_send(inter, message)
+
+
+    @bot.slash_command(name="admin_link_discord", description="Link a leaderboard summoner to a Discord user")
     async def linkdiscord(inter: ApplicationCommandInteraction, user: disnake.Member, name: str, tagline: str, primary: bool = True):
         await inter.response.defer(ephemeral=True)
         if not await require_admin_interaction(inter):
@@ -3716,7 +3944,7 @@ if __name__ == "__main__":
         await send_ephemeral_inter_send(inter, message)
 
 
-    @bot.slash_command(description="Unlink a leaderboard summoner from Discord")
+    @bot.slash_command(name="admin_unlink_discord", description="Unlink a leaderboard summoner from Discord")
     async def unlinkdiscord(inter: ApplicationCommandInteraction, name: str, tagline: str):
         await inter.response.defer(ephemeral=True)
         if not await require_admin_interaction(inter):
@@ -3737,7 +3965,7 @@ if __name__ == "__main__":
         await send_ephemeral_inter_send(inter, message)
 
 
-    @bot.slash_command(description="Set the primary summoner for a linked Discord user")
+    @bot.slash_command(name="admin_primary_discord", description="Set the primary summoner for a linked Discord user")
     async def primarydiscord(inter: ApplicationCommandInteraction, user: disnake.Member, name: str, tagline: str):
         await inter.response.defer(ephemeral=True)
         if not await require_admin_interaction(inter):
