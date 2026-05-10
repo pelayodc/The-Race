@@ -15,6 +15,26 @@ MATCHMAKING_ODD_PLAYER_POLICY_LABELS = {
     "allow_uneven": "Allow uneven teams",
     "require_even": "Require even teams"
 }
+MATCHMAKING_ROLES = ["top", "jungle", "mid", "adc", "support"]
+MATCHMAKING_ROLE_LABELS = {
+    "top": "Top",
+    "jungle": "Jungle",
+    "mid": "Mid",
+    "adc": "ADC",
+    "support": "Support"
+}
+MATCHMAKING_ROLE_SOURCES = ["history", "player", "admin"]
+MATCHMAKING_ROLE_SOURCE_LABELS = {
+    "history": "Cached history",
+    "player": "Player selection",
+    "admin": "Admin selection"
+}
+MATCHMAKING_ROLE_MODES = ["off", "preferred", "inverse"]
+MATCHMAKING_ROLE_MODE_LABELS = {
+    "off": "Off",
+    "preferred": "Preferred roles",
+    "inverse": "Inverse roles"
+}
 CAPTAIN_DRAFT_TIMEOUT_SECONDS = 90
 EPHEMERAL_DELETE_SECONDS = 120
 AUDIT_CATEGORY_LABELS = {

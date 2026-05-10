@@ -2,16 +2,16 @@ import asyncio
 import math
 import random
 from datetime import datetime, timezone
-from itertools import combinations
+from itertools import combinations, permutations
 
 import disnake
 
-from bot_runtime import CAPTAIN_DRAFT_TIMEOUT_SECONDS, MATCHMAKING_ODD_PLAYER_POLICIES, MATCHMAKING_TEAM_MODES, MAX_SELECT_OPTIONS
+from bot_runtime import CAPTAIN_DRAFT_TIMEOUT_SECONDS, MATCHMAKING_ODD_PLAYER_POLICIES, MATCHMAKING_ROLE_MODES, MATCHMAKING_ROLE_SOURCES, MATCHMAKING_ROLES, MATCHMAKING_TEAM_MODES, MAX_SELECT_OPTIONS
 from discord_helpers import get_discord_channel, get_guild_member, public_matchmaking_announcement, require_admin_interaction, send_ephemeral_followup, send_ephemeral_response, send_temporary_public_message
 from i18n import t
 from linked_accounts import primary_summoner_queue_data
 from persistent_messages import refresh_configured_admin_message, refresh_configured_matchmaking_message
-from state import effective_matchmaking_separate_channels, effective_matchmaking_team_mode, effective_odd_players_policy, ensure_matchmaking_state, forced_mode_text, load_json_data, matchmaking_channel_id, odd_players_policy_label, team_mode_label, team_mode_lock_text, voice_mode_label
+from state import effective_matchmaking_role_mode, effective_matchmaking_role_source, effective_matchmaking_separate_channels, effective_matchmaking_team_mode, effective_odd_players_policy, ensure_matchmaking_state, forced_mode_text, load_json_data, matchmaking_channel_id, normalize_matchmaking_role, odd_players_policy_label, role_label, role_mode_label, role_source_label, team_mode_label, team_mode_lock_text, voice_mode_label
 from utils.auditUtils import interaction_actor, log_event, system_actor
 from utils.commonUtils import jsonFile
 from utils.jsonUtils import writeToJsonFile
@@ -85,6 +85,158 @@ def format_team(players, neutral_score=0):
 
 def players_by_id(players):
     return {player_id(player): player for player in players}
+
+def discord_role_preferences(json_data, user_id):
+    ensure_matchmaking_state(json_data)
+    user_id = str(user_id)
+    preferences = json_data.setdefault("discordRolePreferences", {})
+    record = preferences.setdefault(user_id, {})
+    return record
+
+def role_preference_for_player(json_data, player):
+    source = effective_matchmaking_role_source(json_data)
+    user_id = player_id(player)
+    record = discord_role_preferences(json_data, user_id)
+    if source == "player":
+        return normalize_matchmaking_role(record.get("playerRole"))
+    if source == "admin":
+        return normalize_matchmaking_role(record.get("adminRole"))
+    return infer_history_role_for_player(json_data, player)
+
+def infer_history_role_for_player(json_data, player):
+    summoner_name = player.get("summonerFullName")
+    puuid = player.get("puuid")
+    if not summoner_name or not puuid:
+        return None
+
+    summoner_data = (json_data.get("summoners") or {}).get(summoner_name, {})
+    match_data = json_data.get("matchData") or {}
+    role_counts = {}
+    for match_id in summoner_data.get("recentMatchIds", []):
+        match = match_data.get(match_id)
+        if not match:
+            continue
+        for participant in match.get("info", {}).get("participants", []):
+            if participant.get("puuid") != puuid:
+                continue
+            role = normalize_matchmaking_role(
+                participant.get("teamPosition")
+                or participant.get("individualPosition")
+                or participant.get("lane")
+            )
+            if role:
+                role_counts[role] = role_counts.get(role, 0) + 1
+            break
+    if not role_counts:
+        return None
+    return max(role_counts.items(), key=lambda item: (item[1], -MATCHMAKING_ROLES.index(item[0])))[0]
+
+def player_role_label(json_data, player):
+    role = role_preference_for_player(json_data, player)
+    return role_label(role or "fill", json_data)
+
+def matchmaking_player_role_label(json_data, player, include_score=False, neutral_score=0):
+    label = matchmaking_player_label(player, include_score, neutral_score)
+    return f"{label} - {player_role_label(json_data, player)}"
+
+def set_player_role_preference(json_data, user, role, source, actor=None):
+    role = normalize_matchmaking_role(role)
+    if role not in MATCHMAKING_ROLES:
+        return False
+    record = discord_role_preferences(json_data, user.id)
+    record["displayName"] = getattr(user, "display_name", None) or str(user.id)
+    timestamp = datetime.now(timezone.utc).isoformat()
+    if source == "admin":
+        record["adminRole"] = role
+        record["adminRoleUpdatedAt"] = timestamp
+        if actor:
+            record["adminRoleActorId"] = str(actor.get("actorId") or "")
+            record["adminRoleActorName"] = actor.get("actorName")
+    else:
+        record["playerRole"] = role
+        record["playerRoleUpdatedAt"] = timestamp
+    return True
+
+def assign_roles_to_team(json_data, players, role_mode):
+    if len(players) != 5 or role_mode not in ("preferred", "inverse"):
+        return [dict(player) for player in players], 0
+
+    best_assignment = None
+    best_score = None
+    roles = MATCHMAKING_ROLES[:]
+    random.shuffle(roles)
+    for role_order in permutations(roles):
+        score = 0
+        for player, assigned_role in zip(players, role_order):
+            preferred_role = role_preference_for_player(json_data, player)
+            if not preferred_role:
+                continue
+            if role_mode == "preferred" and assigned_role == preferred_role:
+                score += 1
+            elif role_mode == "inverse" and assigned_role != preferred_role:
+                score += 1
+        if best_score is None or score > best_score:
+            best_score = score
+            best_assignment = role_order
+
+    assigned_players = []
+    for player, assigned_role in zip(players, best_assignment or MATCHMAKING_ROLES):
+        assigned_player = dict(player)
+        assigned_player["assignedRole"] = assigned_role
+        assigned_players.append(assigned_player)
+    return assigned_players, best_score or 0
+
+def team_score_diff(team_one, team_two):
+    players = team_one + team_two
+    neutral_score = neutral_unlinked_score(players)
+    return abs(
+        sum(player_score(player, neutral_score) for player in team_one)
+        - sum(player_score(player, neutral_score) for player in team_two)
+    )
+
+def role_matched_teams(json_data, players, prefer_rank_balance=False):
+    role_mode = effective_matchmaking_role_mode(json_data)
+    indexed_players = list(enumerate(players))
+    best_candidates = []
+    best_key = None
+
+    for combo in combinations(indexed_players, 5):
+        team_one_indexes = {index for index, _ in combo}
+        raw_team_one = [player for index, player in indexed_players if index in team_one_indexes]
+        raw_team_two = [player for index, player in indexed_players if index not in team_one_indexes]
+        team_one, team_one_role_score = assign_roles_to_team(json_data, raw_team_one, role_mode)
+        team_two, team_two_role_score = assign_roles_to_team(json_data, raw_team_two, role_mode)
+        role_score = team_one_role_score + team_two_role_score
+        diff = team_score_diff(team_one, team_two) if prefer_rank_balance else 0
+        key = (-role_score, diff)
+        if best_key is None or key < best_key:
+            best_key = key
+            best_candidates = [(team_one, team_two)]
+        elif key == best_key:
+            best_candidates.append((team_one, team_two))
+
+    return random.choice(best_candidates)
+
+def ensure_role_assignments(json_data, team_one, team_two):
+    role_mode = effective_matchmaking_role_mode(json_data)
+    if role_mode not in ("preferred", "inverse"):
+        return team_one, team_two
+    if all(player.get("assignedRole") for player in team_one + team_two):
+        return team_one, team_two
+    assigned_team_one, _ = assign_roles_to_team(json_data, team_one, role_mode)
+    assigned_team_two, _ = assign_roles_to_team(json_data, team_two, role_mode)
+    return assigned_team_one, assigned_team_two
+
+def format_role_team(players, json_data):
+    if not players:
+        return "-"
+    ordered = sorted(players, key=lambda player: MATCHMAKING_ROLES.index(player.get("assignedRole")) if player.get("assignedRole") in MATCHMAKING_ROLES else 99)
+    lines = []
+    for player in ordered:
+        role = role_label(player.get("assignedRole") or "fill", json_data).upper()
+        summoner = player.get("summonerFullName") or "Unlinked"
+        lines.append(f"{role} - <@{player['userId']}> ({summoner})")
+    return "\n".join(lines)
 
 def balanced_rank_teams(players):
     neutral_score = neutral_unlinked_score(players)
@@ -248,7 +400,8 @@ def format_matchmaking_queue(json_data):
     for index, player in enumerate(queue, start=1):
         voice = f"<#{player['voiceChannelId']}>" if player.get("voiceChannelId") else "-"
         summoner = player.get("summonerFullName") or "Unlinked"
-        players.append(f"**{index}.** <@{player['userId']}> - {summoner} - {voice}")
+        role = player_role_label(json_data, player)
+        players.append(f"**{index}.** <@{player['userId']}> - {summoner} - {role} - {voice}")
     return "\n".join(players)
 
 def matchmaking_embed(json_data):
@@ -260,6 +413,8 @@ def matchmaking_embed(json_data):
     team_mode_text = team_mode_label(team_mode, json_data)
     team_mode_lock = team_mode_lock_text(json_data)
     odd_policy = effective_odd_players_policy(json_data)
+    role_source = effective_matchmaking_role_source(json_data)
+    role_mode = effective_matchmaking_role_mode(json_data)
     draft = json_data.get("matchmakingDraft")
     ready_text = t(json_data, "matchmaking.ready") if len(queue) >= 2 else t(json_data, "matchmaking.waiting")
     if draft:
@@ -274,6 +429,8 @@ def matchmaking_embed(json_data):
             f"{ready_text}\n"
             f"{t(json_data, 'matchmaking.players')}: **{len(queue)}/10**\n"
             f"{t(json_data, 'matchmaking.team_mode')}: **{team_mode_text}** ({team_mode_lock})\n"
+            f"{t(json_data, 'matchmaking.role_matching')}: **{role_mode_label(role_mode, json_data)}**\n"
+            f"{t(json_data, 'matchmaking.role_source')}: **{role_source_label(role_source, json_data)}**\n"
             f"{t(json_data, 'matchmaking.voice')}: **{voice_mode_label(separate_channels, json_data)}** ({separate_mode_text})\n"
             f"{t(json_data, 'matchmaking.odd_players')}: **{odd_players_policy_label(odd_policy, json_data)}**"
             f"{fallback_text}"
@@ -298,7 +455,8 @@ def matchmaking_embed(json_data):
             user = f"<@{player['userId']}>"
             voice = f"<#{player['voiceChannelId']}>" if player.get("voiceChannelId") else "-"
             summoner = player.get("summonerFullName") or "Unlinked"
-            players.append(f"**{index}.** {user} - {summoner} - {voice}")
+            role = player_role_label(json_data, player)
+            players.append(f"**{index}.** {user} - {summoner} - {role} - {voice}")
         embed.add_field(name=t(json_data, "matchmaking.current_players"), value="\n".join(players), inline=False)
     else:
         embed.add_field(name=t(json_data, "matchmaking.current_players"), value=t(json_data, "matchmaking.no_players_queue"), inline=False)
@@ -323,6 +481,7 @@ async def active_matchmaking_queue(guild, json_data):
     return active_queue
 
 async def finish_matchmaking_teams(guild, json_data, team_one, team_two, mode, note=None):
+    team_one, team_two = ensure_role_assignments(json_data, team_one, team_two)
     json_data["matchmakingInProgress"] = True
     writeToJsonFile(jsonFile, json_data)
     created_channels = []
@@ -386,8 +545,13 @@ async def finish_matchmaking_teams(guild, json_data, team_one, team_two, mode, n
     scores_available = has_valid_player_scores(players)
     team_one_score = sum(player_score(player, neutral_score) for player in team_one) if scores_available else "-"
     team_two_score = sum(player_score(player, neutral_score) for player in team_two) if scores_available else "-"
-    team_one_mentions = ", ".join(f"<@{player['userId']}>" for player in team_one)
-    team_two_mentions = ", ".join(f"<@{player['userId']}>" for player in team_two)
+    role_mode = effective_matchmaking_role_mode(json_data)
+    if role_mode in ("preferred", "inverse"):
+        team_one_mentions = "\n" + format_role_team(team_one, json_data)
+        team_two_mentions = "\n" + format_role_team(team_two, json_data)
+    else:
+        team_one_mentions = ", ".join(f"<@{player['userId']}>" for player in team_one)
+        team_two_mentions = ", ".join(f"<@{player['userId']}>" for player in team_two)
     message = t(
         json_data,
         "matchmaking.match_started",
@@ -406,6 +570,7 @@ async def finish_matchmaking_teams(guild, json_data, team_one, team_two, mode, n
 async def start_matchmaking_queue(guild, json_data, starter_user_id=None):
     json_data = ensure_matchmaking_state(json_data)
     queue = json_data.get("matchmakingQueue", [])
+    role_mode = effective_matchmaking_role_mode(json_data)
 
     if len(queue) < 2:
         writeToJsonFile(jsonFile, json_data)
@@ -416,6 +581,9 @@ async def start_matchmaking_queue(guild, json_data, starter_user_id=None):
     if len(queue) % 2 and effective_odd_players_policy(json_data) == "require_even":
         writeToJsonFile(jsonFile, json_data)
         return False, t(json_data, "matchmaking.require_even"), json_data
+    if role_mode in ("preferred", "inverse") and len(queue) != 10:
+        writeToJsonFile(jsonFile, json_data)
+        return False, t(json_data, "matchmaking.roles_need_ten"), json_data
 
     mode = effective_matchmaking_team_mode(json_data)
     if mode == "captains":
@@ -430,15 +598,22 @@ async def start_matchmaking_queue(guild, json_data, starter_user_id=None):
         return True, t(json_data, "matchmaking.draft_started", captains=captains), json_data
 
     if mode == "balanced_rank":
-        if has_valid_player_scores(queue):
+        if role_mode in ("preferred", "inverse"):
+            team_one, team_two = role_matched_teams(json_data, queue, prefer_rank_balance=True)
+            note = t(json_data, "matchmaking.role_matching_note", mode=role_mode_label(role_mode, json_data))
+        elif has_valid_player_scores(queue):
             team_one, team_two = balanced_rank_teams(queue)
             note = None
         else:
             team_one, team_two = random_teams(queue)
             note = t(json_data, "matchmaking.balance_fallback_note")
     else:
-        team_one, team_two = random_teams(queue)
-        note = None
+        if role_mode in ("preferred", "inverse"):
+            team_one, team_two = role_matched_teams(json_data, queue, prefer_rank_balance=False)
+            note = t(json_data, "matchmaking.role_matching_note", mode=role_mode_label(role_mode, json_data))
+        else:
+            team_one, team_two = random_teams(queue)
+            note = None
 
     return await finish_matchmaking_teams(guild, json_data, team_one, team_two, mode, note)
 
@@ -505,6 +680,8 @@ def matchmaking_settings_embed(json_data, admin=False):
     title = t(json_data, "matchmaking.admin_settings_title") if admin else t(json_data, "matchmaking.settings_title")
     description = (
         f"{t(json_data, 'matchmaking.team_mode')}: **{team_mode_label(effective_matchmaking_team_mode(json_data), json_data)}** ({team_mode_lock_text(json_data)})\n"
+        f"{t(json_data, 'matchmaking.role_matching')}: **{role_mode_label(effective_matchmaking_role_mode(json_data), json_data)}**\n"
+        f"{t(json_data, 'matchmaking.role_source')}: **{role_source_label(effective_matchmaking_role_source(json_data), json_data)}**\n"
         f"{t(json_data, 'matchmaking.voice')}: **{voice_mode_label(effective_matchmaking_separate_channels(json_data), json_data)}** ({forced_mode_text(json_data)})\n"
         f"{t(json_data, 'matchmaking.odd_players')}: **{odd_players_policy_label(effective_odd_players_policy(json_data), json_data)}**"
     )
@@ -550,6 +727,27 @@ def odd_policy_options(selected_policy, json_data=None):
         for policy in MATCHMAKING_ODD_PLAYER_POLICIES
     ]
 
+def role_source_options(selected_source, json_data=None):
+    json_data = json_data or {}
+    return [
+        disnake.SelectOption(label=role_source_label(source, json_data), value=source, default=selected_source == source)
+        for source in MATCHMAKING_ROLE_SOURCES
+    ]
+
+def role_mode_options(selected_mode, json_data=None):
+    json_data = json_data or {}
+    return [
+        disnake.SelectOption(label=role_mode_label(mode, json_data), value=mode, default=selected_mode == mode)
+        for mode in MATCHMAKING_ROLE_MODES
+    ]
+
+def role_options(selected_role=None, json_data=None):
+    json_data = json_data or {}
+    return [
+        disnake.SelectOption(label=role_label(role, json_data), value=role, default=selected_role == role)
+        for role in MATCHMAKING_ROLES
+    ]
+
 async def refresh_matchmaking_setting_views(inter, json_data, admin=False):
     await refresh_configured_matchmaking_message(json_data)
     await refresh_configured_admin_message(json_data)
@@ -572,7 +770,8 @@ class PublicTeamModeSelect(disnake.ui.Select):
             min_values=1,
             max_values=1,
             options=team_mode_options(selected_mode, json_data=json_data),
-            disabled=disabled
+            disabled=disabled,
+            row=0
         )
 
     async def callback(self, inter: disnake.MessageInteraction):
@@ -600,7 +799,8 @@ class PublicVoiceModeSelect(disnake.ui.Select):
             min_values=1,
             max_values=1,
             options=voice_mode_options(selected_value, json_data=json_data),
-            disabled=forced is not None
+            disabled=forced is not None,
+            row=1
         )
 
     async def callback(self, inter: disnake.MessageInteraction):
@@ -622,7 +822,8 @@ class PublicOddPolicySelect(disnake.ui.Select):
             placeholder=t(json_data, "matchmaking.odd_placeholder"),
             min_values=1,
             max_values=1,
-            options=odd_policy_options(effective_odd_players_policy(json_data), json_data)
+            options=odd_policy_options(effective_odd_players_policy(json_data), json_data),
+            row=2
         )
 
     async def callback(self, inter: disnake.MessageInteraction):
@@ -635,6 +836,76 @@ class PublicOddPolicySelect(disnake.ui.Select):
         log_event("matchmaking_odd_players_policy_selected", actor=interaction_actor(inter), status="success", summary=f"Odd player policy set to {policy}.", details={"policy": self.values[0]})
         await refresh_matchmaking_setting_views(inter, json_data)
 
+class PublicRoleSourceSelect(disnake.ui.Select):
+    def __init__(self, json_data):
+        super().__init__(
+            placeholder=t(json_data, "matchmaking.role_source_placeholder"),
+            min_values=1,
+            max_values=1,
+            options=role_source_options(effective_matchmaking_role_source(json_data), json_data),
+            row=3
+        )
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        json_data = ensure_matchmaking_state(load_json_data())
+        if not await require_queued_settings_user(inter, json_data):
+            return
+        json_data["matchmakingRoleSource"] = self.values[0]
+        writeToJsonFile(jsonFile, json_data)
+        source = role_source_label(self.values[0], json_data)
+        log_event("matchmaking_role_source_selected", actor=interaction_actor(inter), status="success", summary=f"Role source set to {source}.", details={"source": self.values[0]})
+        await refresh_matchmaking_setting_views(inter, json_data)
+
+class PublicRoleModeSelect(disnake.ui.Select):
+    def __init__(self, json_data):
+        super().__init__(
+            placeholder=t(json_data, "matchmaking.role_mode_placeholder"),
+            min_values=1,
+            max_values=1,
+            options=role_mode_options(effective_matchmaking_role_mode(json_data), json_data),
+            row=4
+        )
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        json_data = ensure_matchmaking_state(load_json_data())
+        if not await require_queued_settings_user(inter, json_data):
+            return
+        json_data["matchmakingRoleMode"] = self.values[0]
+        writeToJsonFile(jsonFile, json_data)
+        mode = role_mode_label(self.values[0], json_data)
+        log_event("matchmaking_role_mode_selected", actor=interaction_actor(inter), status="success", summary=f"Role matching set to {mode}.", details={"mode": self.values[0]})
+        await refresh_matchmaking_setting_views(inter, json_data)
+
+class PlayerRoleSelect(disnake.ui.Select):
+    def __init__(self, user_id, json_data):
+        record = discord_role_preferences(json_data, user_id)
+        super().__init__(
+            placeholder=t(json_data, "matchmaking.my_role_placeholder"),
+            min_values=1,
+            max_values=1,
+            options=role_options(normalize_matchmaking_role(record.get("playerRole")), json_data),
+            row=0
+        )
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        json_data = ensure_matchmaking_state(load_json_data())
+        if user_queue_index(json_data["matchmakingQueue"], inter.author.id) is None:
+            await send_ephemeral_response(inter, t(json_data, "matchmaking.only_queued_change"))
+            return
+        set_player_role_preference(json_data, inter.author, self.values[0], "player")
+        writeToJsonFile(jsonFile, json_data)
+        role = role_label(self.values[0], json_data)
+        log_event("matchmaking_player_role_selected", actor=interaction_actor(inter), status="success", summary=f"Player role set to {role}.", details={"role": self.values[0]})
+        await refresh_configured_matchmaking_message(json_data)
+        await refresh_configured_admin_message(json_data)
+        await inter.response.edit_message(content=t(json_data, "matchmaking.my_role_saved", role=role), view=PlayerRoleView(inter.author.id, json_data))
+
+class PlayerRoleView(disnake.ui.View):
+    def __init__(self, user_id, json_data=None):
+        super().__init__(timeout=180)
+        json_data = ensure_matchmaking_state(json_data or load_json_data())
+        self.add_item(PlayerRoleSelect(user_id, json_data))
+
 class MatchmakingSettingsView(disnake.ui.View):
     def __init__(self, user_id, json_data=None):
         super().__init__(timeout=180)
@@ -643,6 +914,8 @@ class MatchmakingSettingsView(disnake.ui.View):
         self.add_item(PublicTeamModeSelect(json_data))
         self.add_item(PublicVoiceModeSelect(json_data))
         self.add_item(PublicOddPolicySelect(json_data))
+        self.add_item(PublicRoleSourceSelect(json_data))
+        self.add_item(PublicRoleModeSelect(json_data))
 
 class AdminTeamModeLockSelect(disnake.ui.Select):
     def __init__(self, json_data):
@@ -650,7 +923,8 @@ class AdminTeamModeLockSelect(disnake.ui.Select):
             placeholder=t(json_data, "matchmaking.team_lock_placeholder"),
             min_values=1,
             max_values=1,
-            options=team_mode_options(include_unlocked=True, forced_mode=json_data.get("matchmakingTeamModeForced"), json_data=json_data)
+            options=team_mode_options(include_unlocked=True, forced_mode=json_data.get("matchmakingTeamModeForced"), json_data=json_data),
+            row=0
         )
 
     async def callback(self, inter: disnake.MessageInteraction):
@@ -672,7 +946,8 @@ class AdminVoiceModeLockSelect(disnake.ui.Select):
             placeholder=t(json_data, "matchmaking.voice_lock_placeholder"),
             min_values=1,
             max_values=1,
-            options=voice_mode_options(include_unlocked=True, forced_value=json_data.get("matchmakingSeparateChannelsForced"), json_data=json_data)
+            options=voice_mode_options(include_unlocked=True, forced_value=json_data.get("matchmakingSeparateChannelsForced"), json_data=json_data),
+            row=1
         )
 
     async def callback(self, inter: disnake.MessageInteraction):
@@ -695,7 +970,8 @@ class AdminOddPolicySelect(disnake.ui.Select):
             placeholder=t(json_data, "matchmaking.odd_policy_placeholder"),
             min_values=1,
             max_values=1,
-            options=odd_policy_options(effective_odd_players_policy(json_data), json_data)
+            options=odd_policy_options(effective_odd_players_policy(json_data), json_data),
+            row=2
         )
 
     async def callback(self, inter: disnake.MessageInteraction):
@@ -707,6 +983,46 @@ class AdminOddPolicySelect(disnake.ui.Select):
         log_event("matchmaking_odd_players_policy_selected", actor=interaction_actor(inter), status="success", summary=f"Odd player policy set to {odd_players_policy_label(self.values[0])}.", details={"policy": self.values[0]})
         await refresh_matchmaking_setting_views(inter, json_data, admin=True)
 
+class AdminRoleSourceSelect(disnake.ui.Select):
+    def __init__(self, json_data):
+        super().__init__(
+            placeholder=t(json_data, "matchmaking.role_source_placeholder"),
+            min_values=1,
+            max_values=1,
+            options=role_source_options(effective_matchmaking_role_source(json_data), json_data),
+            row=3
+        )
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+        json_data = ensure_matchmaking_state(load_json_data())
+        json_data["matchmakingRoleSource"] = self.values[0]
+        writeToJsonFile(jsonFile, json_data)
+        source = role_source_label(self.values[0], json_data)
+        log_event("matchmaking_role_source_selected", actor=interaction_actor(inter), status="success", summary=f"Role source set to {source}.", details={"source": self.values[0]})
+        await refresh_matchmaking_setting_views(inter, json_data, admin=True)
+
+class AdminRoleModeSelect(disnake.ui.Select):
+    def __init__(self, json_data):
+        super().__init__(
+            placeholder=t(json_data, "matchmaking.role_mode_placeholder"),
+            min_values=1,
+            max_values=1,
+            options=role_mode_options(effective_matchmaking_role_mode(json_data), json_data),
+            row=4
+        )
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+        json_data = ensure_matchmaking_state(load_json_data())
+        json_data["matchmakingRoleMode"] = self.values[0]
+        writeToJsonFile(jsonFile, json_data)
+        mode = role_mode_label(self.values[0], json_data)
+        log_event("matchmaking_role_mode_selected", actor=interaction_actor(inter), status="success", summary=f"Role matching set to {mode}.", details={"mode": self.values[0]})
+        await refresh_matchmaking_setting_views(inter, json_data, admin=True)
+
 class MatchmakingAdminSettingsView(disnake.ui.View):
     def __init__(self, json_data=None):
         super().__init__(timeout=180)
@@ -714,6 +1030,8 @@ class MatchmakingAdminSettingsView(disnake.ui.View):
         self.add_item(AdminTeamModeLockSelect(json_data))
         self.add_item(AdminVoiceModeLockSelect(json_data))
         self.add_item(AdminOddPolicySelect(json_data))
+        self.add_item(AdminRoleSourceSelect(json_data))
+        self.add_item(AdminRoleModeSelect(json_data))
 
 class CaptainPickButton(disnake.ui.Button):
     def __init__(self, json_data=None):
@@ -740,6 +1058,23 @@ class CaptainPickButton(disnake.ui.Button):
             await send_ephemeral_response(inter, t(json_data, "matchmaking.no_players_pick"))
             return
         await send_ephemeral_response(inter, t(json_data, "matchmaking.choose_player"), view=CaptainPickView(json_data))
+
+class MyRoleButton(disnake.ui.Button):
+    def __init__(self, json_data=None):
+        json_data = ensure_matchmaking_state(json_data or load_json_data())
+        super().__init__(
+            label=t(json_data, "matchmaking.my_role"),
+            style=disnake.ButtonStyle.gray,
+            custom_id="matchmaking:my_role",
+            row=1
+        )
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        json_data = ensure_matchmaking_state(load_json_data())
+        if user_queue_index(json_data["matchmakingQueue"], inter.author.id) is None:
+            await send_ephemeral_response(inter, t(json_data, "matchmaking.only_queued_settings"))
+            return
+        await send_ephemeral_response(inter, t(json_data, "matchmaking.choose_my_role"), view=PlayerRoleView(inter.author.id, json_data))
 
 class StartMatchButton(disnake.ui.Button):
     def __init__(self, json_data=None):
@@ -786,6 +1121,8 @@ class MatchmakingView(disnake.ui.View):
             self.add_item(CaptainPickButton(json_data))
         elif not draft and len(queue) >= 2:
             self.add_item(StartMatchButton(json_data))
+        if not draft:
+            self.add_item(MyRoleButton(json_data))
         for child in self.children:
             if getattr(child, "custom_id", None) == "matchmaking:join":
                 child.label = t(json_data, "matchmaking.join")
@@ -915,6 +1252,59 @@ class QueueRemoveSelect(disnake.ui.Select):
         await inter.response.edit_message(embed=matchmaking_admin_embed(json_data), view=MatchmakingAdminView(json_data))
         await send_ephemeral_followup(inter, response)
 
+def parse_discord_user_id(value):
+    value = str(value).strip()
+    for char in ["<", ">", "@", "!"]:
+        value = value.replace(char, "")
+    return value if value.isdigit() else None
+
+class SetAdminRoleModal(disnake.ui.Modal):
+    def __init__(self, json_data=None):
+        json_data = ensure_matchmaking_state(json_data or load_json_data())
+        components = [
+            disnake.ui.TextInput(
+                label=t(json_data, "matchmaking.discord_user_label"),
+                custom_id="discord_user",
+                required=True,
+                max_length=100,
+                placeholder="1234567890 or @user"
+            ),
+            disnake.ui.TextInput(
+                label=t(json_data, "matchmaking.role_label"),
+                custom_id="role",
+                required=True,
+                max_length=20,
+                placeholder="top, jungle, mid, adc, support"
+            )
+        ]
+        super().__init__(title=t(json_data, "matchmaking.set_admin_role"), custom_id="admin:matchmaking:set_role_modal", components=components)
+
+    async def callback(self, inter: disnake.ModalInteraction):
+        if not await require_admin_interaction(inter):
+            return
+        json_data = ensure_matchmaking_state(load_json_data())
+        user_id = parse_discord_user_id(inter.text_values["discord_user"])
+        role = normalize_matchmaking_role(inter.text_values["role"])
+        if not user_id:
+            await send_ephemeral_response(inter, t(json_data, "matchmaking.invalid_discord_user"))
+            return
+        if role not in MATCHMAKING_ROLES:
+            await send_ephemeral_response(inter, t(json_data, "matchmaking.invalid_role"))
+            return
+        member = await get_guild_member(inter.guild, user_id)
+        if not member:
+            await send_ephemeral_response(inter, t(json_data, "matchmaking.invalid_discord_user"))
+            return
+
+        set_player_role_preference(json_data, member, role, "admin", actor=interaction_actor(inter))
+        writeToJsonFile(jsonFile, json_data)
+        await refresh_configured_matchmaking_message(json_data)
+        await refresh_configured_admin_message(json_data)
+        role_text = role_label(role, json_data)
+        message = t(json_data, "matchmaking.admin_role_saved", user_id=user_id, role=role_text)
+        log_event("matchmaking_admin_role_set", actor=interaction_actor(inter), status="success", summary=message, details={"userId": str(user_id), "role": role})
+        await send_ephemeral_response(inter, message)
+
 class MatchmakingAdminView(disnake.ui.View):
     def __init__(self, json_data):
         super().__init__(timeout=300)
@@ -926,6 +1316,8 @@ class MatchmakingAdminView(disnake.ui.View):
                 child.label = t(json_data, "matchmaking.force_start")
             elif getattr(child, "custom_id", None) == "admin:matchmaking:configure":
                 child.label = t(json_data, "matchmaking.configure")
+            elif getattr(child, "custom_id", None) == "admin:matchmaking:set_role":
+                child.label = t(json_data, "matchmaking.set_admin_role")
 
     @disnake.ui.button(label="Force start", style=disnake.ButtonStyle.green, custom_id="admin:matchmaking:force_start")
     async def force_start(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -956,6 +1348,12 @@ class MatchmakingAdminView(disnake.ui.View):
         json_data = ensure_matchmaking_state(load_json_data())
         await send_ephemeral_response(inter, embed=matchmaking_settings_embed(json_data, admin=True), view=MatchmakingAdminSettingsView(json_data))
 
+    @disnake.ui.button(label="Set user role", style=disnake.ButtonStyle.gray, custom_id="admin:matchmaking:set_role", row=1)
+    async def set_user_role(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+        await inter.response.send_modal(SetAdminRoleModal(ensure_matchmaking_state(load_json_data())))
+
 def matchmaking_admin_embed(json_data):
     ensure_matchmaking_state(json_data)
     fallback_text = ""
@@ -966,6 +1364,8 @@ def matchmaking_admin_embed(json_data):
         description=(
             f"{t(json_data, 'matchmaking.queue')}: **{len(json_data['matchmakingQueue'])}/10**\n"
             f"{t(json_data, 'matchmaking.team_mode')}: **{team_mode_label(effective_matchmaking_team_mode(json_data), json_data)}** ({team_mode_lock_text(json_data)})\n"
+            f"{t(json_data, 'matchmaking.role_matching')}: **{role_mode_label(effective_matchmaking_role_mode(json_data), json_data)}**\n"
+            f"{t(json_data, 'matchmaking.role_source')}: **{role_source_label(effective_matchmaking_role_source(json_data), json_data)}**\n"
             f"{t(json_data, 'matchmaking.voice')}: **{voice_mode_label(effective_matchmaking_separate_channels(json_data), json_data)}** ({forced_mode_text(json_data)})\n"
             f"{t(json_data, 'matchmaking.odd_players')}: **{odd_players_policy_label(effective_odd_players_policy(json_data), json_data)}**"
             f"{fallback_text}"

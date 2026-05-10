@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from bot_runtime import MATCHMAKING_ODD_PLAYER_POLICIES, MATCHMAKING_ODD_PLAYER_POLICY_LABELS, MATCHMAKING_TEAM_MODES, MATCHMAKING_TEAM_MODE_LABELS
+from bot_runtime import MATCHMAKING_ODD_PLAYER_POLICIES, MATCHMAKING_ODD_PLAYER_POLICY_LABELS, MATCHMAKING_ROLE_LABELS, MATCHMAKING_ROLE_MODE_LABELS, MATCHMAKING_ROLE_MODES, MATCHMAKING_ROLE_SOURCE_LABELS, MATCHMAKING_ROLE_SOURCES, MATCHMAKING_ROLES, MATCHMAKING_TEAM_MODES, MATCHMAKING_TEAM_MODE_LABELS
 from i18n import DEFAULT_LANGUAGE, supported_language, t
 from utils.commonUtils import discordChannel, jsonFile
 from utils.jsonUtils import openJsonFile
@@ -60,6 +60,12 @@ def ensure_matchmaking_state(json_data):
         json_data["matchmakingTeamMode"] = "random"
     if json_data.get("matchmakingTeamModeForced") not in MATCHMAKING_TEAM_MODES:
         json_data["matchmakingTeamModeForced"] = None
+    if json_data.get("matchmakingRoleSource") not in MATCHMAKING_ROLE_SOURCES:
+        json_data["matchmakingRoleSource"] = "history"
+    if json_data.get("matchmakingRoleMode") not in MATCHMAKING_ROLE_MODES:
+        json_data["matchmakingRoleMode"] = "off"
+    role_preferences = json_data.get("discordRolePreferences")
+    json_data["discordRolePreferences"] = role_preferences if isinstance(role_preferences, dict) else {}
     json_data.setdefault("matchmakingDraft", None)
     return json_data
 
@@ -135,3 +141,62 @@ def effective_odd_players_policy(json_data):
 
 def voice_mode_label(separate_channels, json_data=None):
     return t(json_data or {}, "state.voice_separate" if separate_channels else "state.voice_same")
+
+def role_label(role, json_data=None):
+    labels = {
+        "top": "state.role_top",
+        "jungle": "state.role_jungle",
+        "mid": "state.role_mid",
+        "adc": "state.role_adc",
+        "support": "state.role_support",
+        "fill": "state.role_fill",
+    }
+    key = labels.get(role)
+    if key:
+        return t(json_data or {}, key)
+    return MATCHMAKING_ROLE_LABELS.get(role, "Fill")
+
+def role_source_label(source, json_data=None):
+    labels = {
+        "history": "state.role_source_history",
+        "player": "state.role_source_player",
+        "admin": "state.role_source_admin",
+    }
+    key = labels.get(source)
+    if key:
+        return t(json_data or {}, key)
+    return MATCHMAKING_ROLE_SOURCE_LABELS.get(source, "Cached history")
+
+def role_mode_label(mode, json_data=None):
+    labels = {
+        "off": "state.role_mode_off",
+        "preferred": "state.role_mode_preferred",
+        "inverse": "state.role_mode_inverse",
+    }
+    key = labels.get(mode)
+    if key:
+        return t(json_data or {}, key)
+    return MATCHMAKING_ROLE_MODE_LABELS.get(mode, "Off")
+
+def effective_matchmaking_role_source(json_data):
+    source = json_data.get("matchmakingRoleSource")
+    return source if source in MATCHMAKING_ROLE_SOURCES else "history"
+
+def effective_matchmaking_role_mode(json_data):
+    mode = json_data.get("matchmakingRoleMode")
+    return mode if mode in MATCHMAKING_ROLE_MODES else "off"
+
+def normalize_matchmaking_role(role):
+    role = str(role or "").lower().strip()
+    aliases = {
+        "utility": "support",
+        "support": "support",
+        "bottom": "adc",
+        "bot": "adc",
+        "adc": "adc",
+        "middle": "mid",
+        "mid": "mid",
+        "jungle": "jungle",
+        "top": "top",
+    }
+    return aliases.get(role) if role in aliases else role if role in MATCHMAKING_ROLES else None
