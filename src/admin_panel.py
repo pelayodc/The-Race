@@ -374,7 +374,7 @@ class SettingsAdminView(disnake.ui.View):
             elif getattr(child, "custom_id", None) == "admin:settings:leaderboard_chat_commands":
                 child.label = t(json_data, "admin.settings.toggle_commands")
 
-    @disnake.ui.channel_select(placeholder="Set leaderboard channel", channel_types=[disnake.ChannelType.text], custom_id="admin:settings:leaderboard", min_values=1, max_values=1)
+    @disnake.ui.channel_select(placeholder="Set leaderboard channel", channel_types=[disnake.ChannelType.text], custom_id="admin:settings:leaderboard", min_values=1, max_values=1, row=0)
     async def leaderboard_channel(self, select: disnake.ui.ChannelSelect, inter: disnake.MessageInteraction):
         if not await require_admin_interaction(inter):
             return
@@ -390,7 +390,7 @@ class SettingsAdminView(disnake.ui.View):
         message = await configure_leaderboard_channel(channel, interaction_actor(inter))
         await send_ephemeral_followup(inter, message)
 
-    @disnake.ui.channel_select(placeholder="Set matchmaking channel", channel_types=[disnake.ChannelType.text], custom_id="admin:settings:matchmaking", min_values=1, max_values=1)
+    @disnake.ui.channel_select(placeholder="Set matchmaking channel", channel_types=[disnake.ChannelType.text], custom_id="admin:settings:matchmaking", min_values=1, max_values=1, row=1)
     async def matchmaking_channel(self, select: disnake.ui.ChannelSelect, inter: disnake.MessageInteraction):
         if not await require_admin_interaction(inter):
             return
@@ -406,7 +406,7 @@ class SettingsAdminView(disnake.ui.View):
         message = await configure_matchmaking_channel(channel, interaction_actor(inter))
         await send_ephemeral_followup(inter, message)
 
-    @disnake.ui.button(label="Toggle /add /remove", style=disnake.ButtonStyle.gray, custom_id="admin:settings:leaderboard_chat_commands", row=2)
+    @disnake.ui.button(label="Toggle /add /remove", style=disnake.ButtonStyle.gray, custom_id="admin:settings:leaderboard_chat_commands", row=3)
     async def toggle_leaderboard_chat_commands(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
         if not await require_admin_interaction(inter):
             return
@@ -434,7 +434,7 @@ class LanguageSelect(disnake.ui.Select):
             max_values=1,
             options=options,
             custom_id="admin:settings:language",
-            row=1
+            row=2
         )
 
     async def callback(self, inter: disnake.MessageInteraction):
