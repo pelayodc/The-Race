@@ -158,6 +158,11 @@ def status_admin_embed(json_data):
     last_update = json_data.get("leaderboardLastUpdateAt") or "Never"
     update_mode = json_data.get("leaderboardLastUpdateMode") or "-"
     update_status = json_data.get("leaderboardLastUpdateStatus") or "-"
+    daily_image_at = json_data.get("leaderboardLastDailyImageAt") or "Never"
+    daily_image_status = json_data.get("leaderboardLastDailyImageStatus") or "-"
+    daily_image_channel = json_data.get("leaderboardLastDailyImageChannelId")
+    daily_image_message = json_data.get("leaderboardLastDailyImageMessageId") or "-"
+    daily_image_error = json_data.get("leaderboardLastDailyImageError")
     estimated_calls = estimate_leaderboard_api_calls(json_data)
     stored_estimate = json_data.get("leaderboardLastEstimatedApiCalls", 0)
     last_error = json_data.get("lastRiotError") or {}
@@ -171,6 +176,10 @@ def status_admin_embed(json_data):
     )
     embed.add_field(name="Riot backoff", value=backoff_text, inline=False)
     embed.add_field(name="Last leaderboard update", value=f"{last_update}\nMode: **{update_mode}**\nStatus: **{update_status}**", inline=False)
+    daily_image_value = f"{daily_image_at}\nStatus: **{daily_image_status}**\nChannel: **{f'<#{daily_image_channel}>' if daily_image_channel else '-'}**\nMessage: **{daily_image_message}**"
+    if daily_image_error:
+        daily_image_value += f"\nError: {daily_image_error}"
+    embed.add_field(name="Last daily image sent", value=daily_image_value[:1024], inline=False)
     embed.add_field(name="Estimated API calls", value=f"Next normal cycle: **{estimated_calls}**\nLast stored estimate: **{stored_estimate}**\nMatch history/details only refresh on new games, daily, or force.", inline=False)
     embed.add_field(name="Last Riot error", value=error_summary[:1024], inline=False)
 

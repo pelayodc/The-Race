@@ -1,4 +1,5 @@
 from datetime import datetime
+import os
 from types import SimpleNamespace
 
 import disnake
@@ -9,7 +10,7 @@ from i18n import t
 from linked_accounts import find_summoner_key, normalize_tagline, rebuild_discord_links_from_summoners
 from state import ensure_admin_state, leaderboard_channel_id, load_json_data, utc_now_iso
 from utils.auditUtils import log_event
-from utils.commonUtils import jsonFile, riotApKey
+from utils.commonUtils import jsonFile, outputPath, riotApKey
 from utils.dataUtils import riotBackoffRemaining, riotBackoffTimestamp, update
 from utils.jsonUtils import openJsonFile, writeToJsonFile
 
@@ -130,6 +131,18 @@ async def send_or_edit_leaderboard(channel, json_data, summoners, daily=False, d
     message = await channel.send(embed=embed)
     return message.id
 
+async def send_daily_rank_image(channel, json_data):
+    image_path = outputPath("Daily Rank list.png")
+    if not os.path.exists(image_path):
+        return False, "Daily Rank list.png was not generated."
+
+    try:
+        with open(image_path, "rb") as file:
+            message = await channel.send(file=disnake.File(file, filename="Daily Rank list.png"))
+        return True, str(message.id)
+    except (disnake.Forbidden, disnake.HTTPException, OSError) as error:
+        return False, str(error)
+
 def format_summoner_summary(json_data):
     summoners = [summoner for summoner in (json_data.get("summoners") or {}).keys()]
     if not summoners:
@@ -163,6 +176,19 @@ def set_leaderboard_runtime_status(json_data, mode, status, estimated_calls, las
             "context": "leaderboard",
             "summary": last_error
         }
+    writeToJsonFile(jsonFile, latest_json_data)
+    return latest_json_data
+
+def set_daily_image_status(status, message_id=None, error=None, channel_id=None):
+    latest_json_data = load_json_data()
+    latest_json_data["leaderboardLastDailyImageAt"] = utc_now_iso()
+    latest_json_data["leaderboardLastDailyImageStatus"] = status
+    latest_json_data["leaderboardLastDailyImageMessageId"] = message_id
+    latest_json_data["leaderboardLastDailyImageChannelId"] = channel_id
+    if error:
+        latest_json_data["leaderboardLastDailyImageError"] = error
+    else:
+        latest_json_data["leaderboardLastDailyImageError"] = None
     writeToJsonFile(jsonFile, latest_json_data)
     return latest_json_data
 

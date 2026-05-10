@@ -1,5 +1,5 @@
 import math
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import disnake
 import pytz
@@ -9,7 +9,7 @@ import bot_runtime
 from admin_panel import AdminView
 from bot_runtime import TASKS
 from discord_helpers import get_discord_channel, send_temporary_public_message
-from leaderboard import estimate_leaderboard_api_calls, send_or_edit_leaderboard, set_leaderboard_runtime_status
+from leaderboard import estimate_leaderboard_api_calls, send_daily_rank_image, send_or_edit_leaderboard, set_daily_image_status, set_leaderboard_runtime_status
 from matchmaking import MatchmakingView, delete_empty_matchmaking_team_channels, finish_captain_draft_if_complete, is_draft_complete, process_captain_draft_timeout, remove_player_from_matchmaking_draft, user_queue_index
 from persistent_messages import refresh_admin_message, refresh_configured_admin_message, refresh_matchmaking_message, setup_matchmaking_message
 from state import admin_channel_id, ensure_admin_state, ensure_matchmaking_state, leaderboard_channel_id, load_json_data, matchmaking_channel_id
@@ -131,27 +131,30 @@ def register_events(bot):
         # Set the timezone to Europe/London
         timezone = pytz.timezone('Europe/Madrid')
         currentTime = datetime.now(tz=timezone)
-        dateStr = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%y")
-
         dailyTime = currentTime.replace(hour=dailyPostTimer, minute=0, second=0, microsecond=0).timestamp()
 
         # If it's past 9pm and last run time is before 9pm today, update the image
         if currentTime.timestamp() > dailyTime > lastRunTime:
             json_data['runtime'] = dailyTime
             writeToJsonFile(jsonFile, json_data)
-            force_leaderboard = not json_data.get("leaderboardMessageId")
-            summoners, updated = update(force_leaderboard, True, returnData=True, generate=False)
-            status = "updated" if summoners and (updated or force_leaderboard) else "no_changes" if summoners else "skipped"
+            summoners, updated = update(True, True, returnData=True, generate=True)
+            status = "updated" if summoners and updated else "no_changes" if summoners else "skipped"
             json_data = set_leaderboard_runtime_status(json_data, "daily", status, estimated_calls, None if summoners else "Daily leaderboard update returned no summoners.")
-            log_event("leaderboard_update", actor=system_actor(), status="success" if summoners else "error", summary=f"Daily leaderboard update {status}.", details={"updated": bool(updated), "force": bool(force_leaderboard), "summoners": len(summoners or [])})
-            if summoners and (updated or force_leaderboard):
-                channel = await get_discord_channel(leaderboard_channel_id(json_data))
+            log_event("leaderboard_update", actor=system_actor(), status="success" if summoners else "error", summary=f"Daily leaderboard update {status}.", details={"updated": bool(updated), "force": True, "summoners": len(summoners or [])})
+            if summoners:
+                channel = await get_discord_channel(discordChannel)
                 if not channel:
-                    log_event("leaderboard_update", actor=system_actor(), status="error", summary="Leaderboard channel was not found.", details={"channelId": str(leaderboard_channel_id(json_data))})
+                    summary = "Daily rank image channel was not found."
+                    set_daily_image_status("error", error=summary, channel_id=str(discordChannel))
+                    log_event("leaderboard_daily_image_sent", actor=system_actor(), status="error", summary=summary, details={"channelId": str(discordChannel)})
                     return
-                latest_json_data = openJsonFile(jsonFile)
-                latest_json_data['leaderboardMessageId'] = await send_or_edit_leaderboard(channel, latest_json_data, summoners, True, dateStr)
-                writeToJsonFile(jsonFile, latest_json_data)
+                sent, result = await send_daily_rank_image(channel, json_data)
+                if sent:
+                    set_daily_image_status("sent", message_id=result, channel_id=str(discordChannel))
+                    log_event("leaderboard_daily_image_sent", actor=system_actor(), status="success", summary=f"Daily rank image sent to {channel.mention}.", details={"channelId": str(discordChannel), "messageId": result, "summoners": len(summoners)})
+                else:
+                    set_daily_image_status("error", error=result, channel_id=str(discordChannel))
+                    log_event("leaderboard_daily_image_sent", actor=system_actor(), status="error", summary=f"Daily rank image was not sent: {result}", details={"channelId": str(discordChannel)})
             await refresh_configured_admin_message()
         else:
             force_leaderboard = not json_data.get("leaderboardMessageId")

@@ -81,6 +81,11 @@ def ensure_admin_state(json_data):
     json_data.setdefault("leaderboardLastUpdateMode", None)
     json_data.setdefault("leaderboardLastUpdateStatus", None)
     json_data.setdefault("leaderboardLastEstimatedApiCalls", 0)
+    json_data.setdefault("leaderboardLastDailyImageAt", None)
+    json_data.setdefault("leaderboardLastDailyImageStatus", None)
+    json_data.setdefault("leaderboardLastDailyImageMessageId", None)
+    json_data.setdefault("leaderboardLastDailyImageChannelId", None)
+    json_data.setdefault("leaderboardLastDailyImageError", None)
     json_data.setdefault("lastRiotError", None)
     return json_data
 
