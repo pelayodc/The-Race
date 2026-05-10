@@ -238,6 +238,46 @@ def format_role_team(players, json_data):
         lines.append(f"{role} - <@{player['userId']}> ({summoner})")
     return "\n".join(lines)
 
+def format_admin_roles_summary(json_data):
+    ensure_matchmaking_state(json_data)
+    preferences = json_data.get("discordRolePreferences") or {}
+    queue_by_id = players_by_id(json_data.get("matchmakingQueue", []))
+    user_ids = sorted(set(preferences.keys()) | set(queue_by_id.keys()))
+    if not user_ids:
+        return t(json_data, "matchmaking.no_role_preferences")
+
+    lines = []
+    for user_id in user_ids[:20]:
+        record = preferences.get(str(user_id), {})
+        player = queue_by_id.get(str(user_id), {"userId": user_id})
+        player_role = normalize_matchmaking_role(record.get("playerRole"))
+        admin_role = normalize_matchmaking_role(record.get("adminRole"))
+        effective_role = role_preference_for_player(json_data, player)
+        lines.append(
+            f"<@{user_id}> - "
+            f"{t(json_data, 'matchmaking.player_role_short')}: **{role_label(player_role or 'fill', json_data)}** | "
+            f"{t(json_data, 'matchmaking.admin_role_short')}: **{role_label(admin_role or 'fill', json_data)}** | "
+            f"{t(json_data, 'matchmaking.effective_role_short')}: **{role_label(effective_role or 'fill', json_data)}**"
+        )
+    if len(user_ids) > 20:
+        lines.append(t(json_data, "matchmaking.more_role_preferences", count=len(user_ids) - 20))
+    return "\n".join(lines)
+
+def role_preferences_admin_embed(json_data):
+    ensure_matchmaking_state(json_data)
+    embed = disnake.Embed(
+        title=t(json_data, "matchmaking.role_preferences_title"),
+        description=(
+            f"{t(json_data, 'matchmaking.role_source')}: **{role_source_label(effective_matchmaking_role_source(json_data), json_data)}**\n"
+            f"{t(json_data, 'matchmaking.role_matching')}: **{role_mode_label(effective_matchmaking_role_mode(json_data), json_data)}**"
+        ),
+        colour=disnake.Colour.blurple(),
+        timestamp=datetime.now()
+    )
+    embed.add_field(name=t(json_data, "matchmaking.role_preferences"), value=format_admin_roles_summary(json_data)[:1024], inline=False)
+    embed.set_footer(text=t(json_data, "matchmaking.role_preferences_footer"))
+    return embed
+
 def balanced_rank_teams(players):
     neutral_score = neutral_unlinked_score(players)
     target_size = len(players) // 2
@@ -1318,6 +1358,8 @@ class MatchmakingAdminView(disnake.ui.View):
                 child.label = t(json_data, "matchmaking.configure")
             elif getattr(child, "custom_id", None) == "admin:matchmaking:set_role":
                 child.label = t(json_data, "matchmaking.set_admin_role")
+            elif getattr(child, "custom_id", None) == "admin:matchmaking:view_roles":
+                child.label = t(json_data, "matchmaking.view_roles")
 
     @disnake.ui.button(label="Force start", style=disnake.ButtonStyle.green, custom_id="admin:matchmaking:force_start")
     async def force_start(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -1353,6 +1395,14 @@ class MatchmakingAdminView(disnake.ui.View):
         if not await require_admin_interaction(inter):
             return
         await inter.response.send_modal(SetAdminRoleModal(ensure_matchmaking_state(load_json_data())))
+
+    @disnake.ui.button(label="View roles", style=disnake.ButtonStyle.gray, custom_id="admin:matchmaking:view_roles", row=2)
+    async def view_roles(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+        json_data = ensure_matchmaking_state(load_json_data())
+        log_event("matchmaking_roles_viewed", actor=interaction_actor(inter), status="success", summary="Admin viewed matchmaking role preferences.")
+        await send_ephemeral_response(inter, embed=role_preferences_admin_embed(json_data))
 
 def matchmaking_admin_embed(json_data):
     ensure_matchmaking_state(json_data)

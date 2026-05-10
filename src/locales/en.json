@@ -227,6 +227,7 @@
     "configure": "Configure",
     "force_start": "Force start",
     "my_role": "My role",
+    "view_roles": "View roles",
     "pick_select_placeholder": "Pick a player for your team",
     "team_mode_placeholder": "Team mode",
     "voice_placeholder": "Voice channels",
@@ -290,7 +291,15 @@
     "role_label": "Role",
     "invalid_discord_user": "Invalid Discord user.",
     "invalid_role": "Invalid role. Use top, jungle, mid, adc, or support.",
-    "admin_role_saved": "Admin role for <@{user_id}> saved as {role}."
+    "admin_role_saved": "Admin role for <@{user_id}> saved as {role}.",
+    "role_preferences_title": "Matchmaking roles",
+    "role_preferences": "Role preferences",
+    "role_preferences_footer": "Effective role follows the currently selected role source. History only resolves for queued linked users.",
+    "no_role_preferences": "No role preferences or queued players found.",
+    "player_role_short": "Player",
+    "admin_role_short": "Admin",
+    "effective_role_short": "Effective",
+    "more_role_preferences": "...and {count} more users."
   },
   "personal_report": {
     "no_rank": "No cached ranked data yet.",

@@ -227,6 +227,7 @@
     "configure": "Configura",
     "force_start": "Forza inizio",
     "my_role": "Il mio ruolo",
+    "view_roles": "Vedi ruoli",
     "pick_select_placeholder": "Scegli un giocatore per la tua squadra",
     "team_mode_placeholder": "Modalità squadre",
     "voice_placeholder": "Canali vocali",
@@ -290,7 +291,15 @@
     "role_label": "Ruolo",
     "invalid_discord_user": "Utente Discord non valido.",
     "invalid_role": "Ruolo non valido. Usa top, jungle, mid, adc o support.",
-    "admin_role_saved": "Ruolo admin di <@{user_id}> salvato come {role}."
+    "admin_role_saved": "Ruolo admin di <@{user_id}> salvato come {role}.",
+    "role_preferences_title": "Ruoli matchmaking",
+    "role_preferences": "Preferenze ruoli",
+    "role_preferences_footer": "Il ruolo effettivo segue la fonte ruoli selezionata. La cronologia funziona solo per utenti collegati in coda.",
+    "no_role_preferences": "Nessuna preferenza ruolo o giocatore in coda.",
+    "player_role_short": "Giocatore",
+    "admin_role_short": "Admin",
+    "effective_role_short": "Effettivo",
+    "more_role_preferences": "...e altri {count} utenti."
   },
   "personal_report": {
     "no_rank": "Nessun dato ranked in cache ancora.",
