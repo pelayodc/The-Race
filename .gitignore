@@ -1,4 +1,10 @@
 .idea/*
+.github/*
+.specify/*
+.agents/*
+.vscode/*
+/skills-lock.json
+/data.json
 /.env
 /src/.env
 /src/data.json
