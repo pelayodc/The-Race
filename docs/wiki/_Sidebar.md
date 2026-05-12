@@ -1,15 +1,15 @@
 # The Race Wiki
 
-- [Home](Home.md)
-- [Project Scope](Project-Scope.md)
-- [Setup and Configuration](Setup-and-Configuration.md)
-- [Operations Guide](Operations-Guide.md)
-- [Code Map](Code-Map.md)
-- [State and Artifacts](State-and-Artifacts.md)
-- [Troubleshooting](Troubleshooting.md)
-- [Contributing](Contributing-to-The-Race.md)
+- [[Home]]
+- [[Project Scope|Project-Scope]]
+- [[Setup and Configuration|Setup-and-Configuration]]
+- [[Operations Guide|Operations-Guide]]
+- [[Code Map|Code-Map]]
+- [[State and Artifacts|State-and-Artifacts]]
+- [[Troubleshooting]]
+- [[Contributing|Contributing-to-The-Race]]
 
 ## Repository
 
-- [README](../README.md)
-- [Contributing](../CONTRIBUTING.md)
+- [README](https://github.com/pelayodc/The-Race#readme)
+- [Issues](https://github.com/pelayodc/The-Race/issues)

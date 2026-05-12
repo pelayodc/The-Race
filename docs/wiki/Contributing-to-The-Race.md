@@ -6,7 +6,7 @@ Read `CONTRIBUTING.md` before opening a pull request. Contributions should avoid
 
 ## Choose the Right Code Area
 
-Use [Code Map](Code-Map.md) before editing:
+Use [[Code Map|Code-Map]] before editing:
 
 - Leaderboard, daily image, summoner add/remove: `src/leaderboard.py`, `src/utils/dataUtils.py`, `src/utils/drawUtils.py`.
 - Admin panel and operations: `src/admin_panel.py`, `src/persistent_messages.py`, `src/discord_helpers.py`.
