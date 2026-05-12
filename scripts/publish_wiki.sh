@@ -6,6 +6,8 @@ WIKI_SOURCE_DIR="${WIKI_SOURCE_DIR:-$REPO_ROOT/docs/wiki}"
 WIKI_REMOTE_URL="${WIKI_REMOTE_URL:-}"
 WIKI_WORKTREE="${WIKI_WORKTREE:-$(mktemp -d)}"
 COMMIT_MESSAGE="${COMMIT_MESSAGE:-Update GitHub Wiki documentation}"
+GIT_AUTHOR_NAME="${GIT_AUTHOR_NAME:-github-actions[bot]}"
+GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-41898282+github-actions[bot]@users.noreply.github.com}"
 
 if [[ ! -d "$WIKI_SOURCE_DIR" ]]; then
   echo "Wiki source directory not found: $WIKI_SOURCE_DIR" >&2
@@ -53,6 +55,9 @@ else
     exit 1
   fi
 fi
+
+git -C "$WIKI_WORKTREE" config user.name "$GIT_AUTHOR_NAME"
+git -C "$WIKI_WORKTREE" config user.email "$GIT_AUTHOR_EMAIL"
 
 find "$WIKI_WORKTREE" -maxdepth 1 -type f -name '*.md' -delete
 cp "$WIKI_SOURCE_DIR"/*.md "$WIKI_WORKTREE"/
