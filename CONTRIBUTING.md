@@ -1,36 +1,41 @@
-# Contribution to [The Race](https://github.com/ScottFal/The-Race)
+# Contributing to The Race
+
+Thanks for helping improve The Race. This file is the repository-level contribution guide that GitHub shows to issue and pull request authors.
+
+For project-specific maintenance guidance, code ownership, state safety, localization, and verification expectations, read the extended wiki page: [Contributing to The Race](docs/wiki/Contributing-to-The-Race.md).
 
 ## Feature Requests
 
-A feature request is a request for a new feature or an enhancement to an existing feature. 
+Before opening a feature request, search existing issues to avoid duplicates. Describe:
 
-Ensure you do not create a duplicate feature request by searching through the [existing feature requests](https://github.com/ScottFal/The-Race/issues?q=is%3Aissue+label%3Aenhancement)
+- The user or operator problem.
+- The expected behavior.
+- Any Discord workflow, Riot data, or admin panel area involved.
+- Why the feature fits the project scope.
 
-Please give detailed information about the feature you are requesting in order for it to be best implemented and note that feature requests are not guaranteed to be implemented.
+Feature requests are not guaranteed to be implemented.
 
 ## Bug Reports
 
-A bug report is a report of a bug or issue in the software.
+Before opening a bug report, search existing issues to avoid duplicates. Include:
 
-Ensure you do not create a duplicate bug report by searching through the [existing bug reports](https://github.com/ScottFal/The-Race/issues?q=is%3Aissue+is%3Aclosed+label%3Abug)
-
-Please make sure to include as much information as possible in your bug report. This includes:
-
-- The version of The Race you are using
-- The version of Python you are using
-- The operating system you are using
-- The steps to reproduce the bug
-- The expected behaviour
-- The actual behaviour
-- Any error messages
+- The version or commit of The Race.
+- Python version and operating system.
+- Steps to reproduce.
+- Expected behavior.
+- Actual behavior.
+- Relevant error messages, Discord screenshots, or audit/status output.
+- Whether Riot backoff, Discord permissions, or missing channels were involved.
 
 ## Pull Requests
 
-A pull request is a request to add your own code to the project therefore solving an issue or adding a feature.
+Pull requests should:
 
-Please ensure your pull request adheres to the following guidelines:
-- It doesn't dramatically change core functionality
-- It does not break existing functionality
-- It doesn't contain any self-promotion or advertising
-- It is not pointless
-- It follows a similar style to the rest of the project
+- Preserve existing functionality and Discord UX.
+- Follow the style and module boundaries already used in the project.
+- Avoid unrelated refactors or formatting churn.
+- Avoid self-promotion, advertising, or pointless changes.
+- Update documentation when behavior, setup, operations, or maintenance expectations change.
+- Include appropriate verification for the risk of the change.
+
+For deeper implementation guidance, use the wiki contribution page before editing code.
