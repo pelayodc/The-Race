@@ -1,8 +1,11 @@
 .idea/*
 .github/*
+!.github/workflows/
+!.github/workflows/**
 .specify/*
 .agents/*
 .vscode/*
+/specs/*
 /skills-lock.json
 /data.json
 /.env

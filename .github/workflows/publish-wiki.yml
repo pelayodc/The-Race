@@ -1,0 +1,30 @@
+name: Publish GitHub Wiki
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "docs/wiki/**"
+      - ".github/workflows/publish-wiki.yml"
+      - "scripts/publish_wiki.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish-wiki:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Publish docs/wiki to GitHub Wiki
+        env:
+          WIKI_REMOTE_URL: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.wiki.git
+          COMMIT_MESSAGE: "Update GitHub Wiki documentation"
+        run: bash scripts/publish_wiki.sh

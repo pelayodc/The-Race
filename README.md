@@ -1,86 +1,105 @@
-![Image](/img/banner.png)
+![The Race banner](img/banner.png)
 
-<div align="center">
-    A League of Legends leaderboard & live game tracker+ discord bot
-</div>
-<hr style="border-radius: 2%; margin-top: 60px; margin-bottom: 60px;" noshade="" size="20" width="100%">
+# The Race
+
+The Race is a League of Legends Discord bot for running a Solo/Duo leaderboard and related server workflows. It tracks ranked progress, daily LP movement, recent games, MVP/crown status, patch notes, linked Discord accounts, personal reports, and matchmaking queues from Discord.
 
 ## Features
--   🚀 Live game tracker
-    -   Instant updates
-    -   LP tracker
-    -   Daily LP tracker
-    -   5 Recent games with KDA and damage stats
-    -   Win/loss streak(3+)
-    -   Leaderboard position tracker
-    -   Daily leaderboard position tracker
--   👑 MVP
-    -   Crown holder
-    -   MVP banner for each game
-    -   Customizable MVP algorithm using z-score normalisation
--   🧾 Patch notes
-    -   Tracks and posts official patch note releases
--   Other
-    -   Add/Remove summoners from any region
-    -   Crown holder leaderboard
-    -   If the summoner is master+, displays the server rank
-    -   Supports new champions and patch releases 
-## Screenshots
-<div align="center">
-    <div align="center">
-    The bot will send an image like this when there is an update
-</div>
-    <img style="border-radius: 15px; display: block; margin-left: auto; margin-right: auto; margin-bottom:20px;" width="50%" src="img/Rank_list1.png"></img>
-    <hr style="border-radius: 2%; margin-top: 60px; margin-bottom: 60px;" noshade="" size="20" width="100%">
-        <div align="center">
-    The bot will send an image like this when its time for the daily post
-</div>
-    <img style="border-radius: 15px; display: block; margin-left: auto; margin-right: auto; margin-bottom:20px;" width="50%" src="img/Daily_Rank_list1.png"></img>
-     <hr style="border-radius: 2%; margin-top: 60px; margin-bottom: 60px;" noshade="" size="20" width="100%">
-        <div align="center">
-    All the available commands
-</div>
-    <img style="border-radius: 15px; display: block; margin-left: auto; margin-right: auto; margin-bottom:20px;" width="50%" src="img/Screenshot_1.png"></img>
-     <hr style="border-radius: 2%; margin-top: 60px; margin-bottom: 60px;" noshade="" size="20" width="100%">
-        <div align="center">
-    Example of /add
-</div>
-    <img style="border-radius: 15px; display: block; margin-left: auto; margin-right: auto; margin-bottom:20px;" width="50%" src="img/Screenshot_2.png"></img>
-     <hr style="border-radius: 2%; margin-top: 60px; margin-bottom: 60px;" noshade="" size="20" width="100%">
-        <div align="center">
-    Example of /patch being used, the bot will automatically post this when new patch notes come out, but you can manually request it
-</div>
-    <img style="border-radius: 15px; display: block; margin-left: auto; margin-right: auto; margin-bottom:20px;" width="50%" src="img/Screenshot_4.png"></img>
-</div>
 
-## Install
+- Live Solo/Duo leaderboard with LP, rank, position, and recent-game context.
+- Daily ranking image generation and posting.
+- MVP and crown tracking based on recent match performance.
+- Patch note checks and manual patch lookup.
+- Discord account linking for personal `/me` reports.
+- Matchmaking queue with random, balanced-rank, and captain modes.
+- Admin panel for configuration, status, logs, backups, force refreshes, and persistent messages.
+- Multi-language Discord UI strings through `src/locales/`.
+
+## Documentation
+
+Detailed documentation is staged in [`docs/wiki/`](docs/wiki/) for GitHub Wiki publication:
+
+- [Wiki Home](docs/wiki/Home.md)
+- [Project Scope](docs/wiki/Project-Scope.md)
+- [Setup and Configuration](docs/wiki/Setup-and-Configuration.md)
+- [Operations Guide](docs/wiki/Operations-Guide.md)
+- [Code Map](docs/wiki/Code-Map.md)
+- [State and Artifacts](docs/wiki/State-and-Artifacts.md)
+- [Troubleshooting](docs/wiki/Troubleshooting.md)
+- [Contributing to The Race](docs/wiki/Contributing-to-The-Race.md)
+
+The GitHub Wiki can be published manually with `scripts/publish_wiki.sh` or automatically through the `Publish GitHub Wiki` GitHub Actions workflow when `docs/wiki/**` changes on `main` or `master`.
+
+## Quick Start
 
 ### Prerequisites
--   [Python](https://www.python.org/downloads/release/python-3102/)
--   RIOT API key, you have to request one from them, it's very easy to get one
--   Discord bot token
--   Preferably a system to run it 24/7 (Rasberry pi)
+
+- Python 3.10+
+- Discord bot token
+- Riot API key
+- A Discord server where the bot can send messages and embeds
 
 ### Setup
-- install requirements.txt
-- Add your keys and config in a `.env` file at the project root. A legacy `src/.env` file is also supported.
-- run `python src/main.py` from the project root, or `python main.py` from `src`.
 
-### About
+1. Install dependencies:
 
+   ```bash
+   python3 -m pip install -r requirements.txt
+   ```
+
+2. Create a `.env` file in the repository root:
+
+   ```env
+   DISCORD_TOKEN=your-discord-token
+   RIOT_API_KEY=your-riot-api-key
+   DISCORD_CHANNEL=123456789012345678
+   REQUESTS=100
+   DAILY=21
+   ```
+
+3. Start the bot:
+
+   ```bash
+   python3 src/main.py
+   ```
+
+4. In Discord, use `/admin_setup` to create the administration message, then configure the leaderboard and matchmaking channels from the admin panel.
+
+For full setup details, permissions, channel configuration, and first-run checks, see [Setup and Configuration](docs/wiki/Setup-and-Configuration.md).
+
+## Screenshots
+
+Ranking image:
+
+![Ranking image](img/Rank_list1.png)
+
+Daily ranking image:
+
+![Daily ranking image](img/Daily_Rank_list1.png)
+
+Command example:
+
+![Command example](img/Screenshot_1.png)
+
+Patch note example:
+
+![Patch note example](img/Screenshot_4.png)
+
+## Repository Layout
+
+- `src/`: bot runtime, Discord commands/events, admin panel, leaderboard, matchmaking, linked accounts, personal reports, state, localization, and utilities.
+- `src/Imgs/`: rank icons, champion icons, and generated/downloaded visual assets used by image rendering.
+- `docs/wiki/`: GitHub Wiki-ready documentation.
+- `data.json`: local runtime state; do not commit real production data.
+
+See [Code Map](docs/wiki/Code-Map.md) and [State and Artifacts](docs/wiki/State-and-Artifacts.md) for details.
 
 ## Contributing
 
-View the [contributing guidelines](CONTRIBUTING.md) for more information on how you can help out.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) and [Contributing to The Race](docs/wiki/Contributing-to-The-Race.md) before changing code. Changes should preserve Discord UX, Riot API discipline, state safety, localization, and focused verification.
 
 ## License
 
-The race is licensed under the <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/deed.en">CC BY-NC-SA 4.0 License</a>.
+The Race is licensed under the [CC BY-NC-SA 4.0 License](https://creativecommons.org/licenses/by-nc-sa/4.0/deed.en).
 
-## Errors?
-
--   Make an [issue](https://github.com/ScottFal/The-Race/issues)
--   Message on Discord: sc_0001
-
-
-![Image](/img/footer.png)
+![Footer](img/footer.png)
