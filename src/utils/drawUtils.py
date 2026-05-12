@@ -133,16 +133,25 @@ def drawFileImage(canvas, file, x, y, w=0, opacity=1.0, cropTop=None, cropBottom
 
 
 def drawTextCentered(canvas, text, x, y, font, colour=((255, 255, 255))):
-    # Get the size of the text using the provided font
     draw = ImageDraw.Draw(canvas)
-    textBbox = draw.textbbox((x, y), text, font=font)
+    textBbox = draw.textbbox((0, 0), text, font=font)
 
-    # Calculate the x and y positions to center the text
-    centerX = x - (textBbox[2] - textBbox[0]) / 2
-    centerY = y - (textBbox[3] - textBbox[1]) / 2
+    centerX = x - (textBbox[2] + textBbox[0]) / 2
+    centerY = y - (textBbox[3] + textBbox[1]) / 2
 
-    # Draw the text at the center position with the specified opacity
     draw.text((centerX, centerY), text, colour, font=font)
+
+
+def drawSegmentedTextCentered(canvas, segments, x, y, font):
+    draw = ImageDraw.Draw(canvas)
+    totalWidth = sum(textWidth(draw, text, font) for text, _ in segments)
+    textBbox = draw.textbbox((0, 0), "".join(text for text, _ in segments), font=font)
+    currentX = x - totalWidth / 2
+    centerY = y - (textBbox[3] + textBbox[1]) / 2
+
+    for text, colour in segments:
+        draw.text((currentX, centerY), text, fill=colour, font=font)
+        currentX += textWidth(draw, text, font)
 
 
 def formatTime(seconds):
@@ -456,14 +465,26 @@ def drawSummonerRow(canvas, summoner, index, y, daily, icons, hotStreakIcon, col
 
     totalGames = summoner.wins + summoner.losses
     winrate = round(summoner.wins / totalGames * 100, 1) if totalGames else 0
-    statY = y + 92
+    statY = y + 87
     statFill = (31, 32, 40)
-    drawPill(draw, (playerX, statY - 5, playerX + 78, statY + 22), statFill, None, radius=13)
-    drawTextCentered(canvas, f"{summoner.leaguePoints} LP", playerX + 39, statY + 8, fonts["small"], (220, 225, 236))
-    drawPill(draw, (playerX + 86, statY - 5, playerX + 176, statY + 22), statFill, None, radius=13)
-    drawTextCentered(canvas, f"{summoner.wins}/{summoner.losses}", playerX + 131, statY + 8, fonts["small"], (220, 225, 236))
-    drawPill(draw, (playerX + 184, statY - 5, playerX + 266, statY + 22), statFill, None, radius=13)
-    drawTextCentered(canvas, f"{winrate}%", playerX + 225, statY + 8, fonts["small"], (220, 225, 236))
+    lpFill = (48, 53, 67)
+    statCenterY = statY + 17
+    drawPill(draw, (playerX, statY, playerX + 108, statY + 34), lpFill, (82, 90, 112), radius=17, width=1)
+    drawTextCentered(canvas, f"{summoner.leaguePoints} LP", playerX + 54, statCenterY, fonts["lp"], (248, 249, 252))
+    drawPill(draw, (playerX + 116, statY, playerX + 210, statY + 34), statFill, None, radius=17)
+    drawSegmentedTextCentered(
+        canvas,
+        [
+            (str(summoner.wins), (112, 234, 150)),
+            ("/", (178, 184, 199)),
+            (str(summoner.losses), (255, 132, 140)),
+        ],
+        playerX + 163,
+        statCenterY,
+        fonts["small"],
+    )
+    drawPill(draw, (playerX + 218, statY, playerX + 302, statY + 34), statFill, None, radius=17)
+    drawTextCentered(canvas, f"{winrate}%", playerX + 260, statCenterY, fonts["small"], (220, 225, 236))
 
     drawChangeBadge(canvas, x + 570, y + 34, daily, summoner, fonts)
 
@@ -476,7 +497,7 @@ def generateImage(summones, daily):
     headerHeight = 130
     rowHeight = 124
     rowGap = 14
-    footerHeight = 58
+    footerHeight = 28
     canvasHeight = headerHeight + (rowHeight + rowGap) * len(summones) + footerHeight
 
     canvas = Image.new('RGBA', (canvasWidth, canvasHeight), (35, 37, 46, 255))
@@ -500,6 +521,7 @@ def generateImage(summones, daily):
         "tagline": ImageFont.truetype(assetPath("ARIAL.TTF"), 15),
         "tier": ImageFont.truetype(assetPath("ARIAL.TTF"), 24),
         "small": ImageFont.truetype(assetPath("ARIAL.TTF"), 16),
+        "lp": ImageFont.truetype(assetPath("ARIAL.TTF"), 20),
         "change": ImageFont.truetype(assetPath("ARIAL.TTF"), 25),
         "kda": ImageFont.truetype(assetPath("ARIAL.TTF"), 23),
         "damage": ImageFont.truetype(assetPath("ARIAL.TTF"), 20),
@@ -512,9 +534,6 @@ def generateImage(summones, daily):
     for index, summoner in enumerate(summones):
         drawSummonerRow(canvas, summoner, index, y, daily, icons, hotStreakIcon, coldStreakIcon, crownIcon, fonts)
         y += rowHeight + rowGap
-
-    footerText = "SLASH COMMANDS: /add, /remove, /list, /patch"
-    drawTextCentered(canvas, footerText, canvasWidth / 2, y + 22, fonts["footer"], (178, 184, 199))
 
     if daily:
         canvas.save(outputPath('Daily Rank list.png'))

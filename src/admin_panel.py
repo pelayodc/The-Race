@@ -7,7 +7,7 @@ import disnake
 from bot_runtime import AUDIT_CATEGORY_LABELS, AUDIT_CATEGORY_PREFIXES, MAX_SELECT_OPTIONS, TASKS, bot
 from discord_helpers import get_discord_channel, get_guild_member, require_admin_interaction, send_ephemeral, send_ephemeral_followup, send_ephemeral_response
 from i18n import available_languages, language_label, t
-from leaderboard import add_summoner_to_data, estimate_leaderboard_api_calls, force_leaderboard_refresh, format_summoner_summary, remove_summoner_from_data
+from leaderboard import add_summoner_to_data, estimate_leaderboard_api_calls, force_daily_rank_image, force_leaderboard_refresh, format_summoner_summary, remove_summoner_from_data
 from linked_accounts import LinkedAccountsAdminView, linked_accounts_admin_embed, rebuild_discord_links_from_summoners
 from matchmaking import MatchmakingAdminView, matchmaking_admin_embed
 from persistent_messages import configure_leaderboard_channel, configure_matchmaking_channel, configured_message_status, recreate_persistent_messages, refresh_configured_admin_message, refresh_configured_matchmaking_message
@@ -584,6 +584,16 @@ class StatusLogsAdminView(disnake.ui.View):
 
         await inter.response.defer(ephemeral=True)
         success, message, json_data = await force_leaderboard_refresh(interaction_actor(inter))
+        await refresh_configured_admin_message(json_data)
+        await send_ephemeral_followup(inter, message)
+
+    @disnake.ui.button(label="Force daily image", style=disnake.ButtonStyle.red, custom_id="admin:status:force_daily_image", row=2)
+    async def force_daily_image(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+
+        await inter.response.defer(ephemeral=True)
+        success, message, json_data = await force_daily_rank_image(interaction_actor(inter))
         await refresh_configured_admin_message(json_data)
         await send_ephemeral_followup(inter, message)
 

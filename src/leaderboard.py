@@ -10,7 +10,7 @@ from i18n import t
 from linked_accounts import find_summoner_key, normalize_tagline, rebuild_discord_links_from_summoners
 from state import ensure_admin_state, leaderboard_channel_id, load_json_data, utc_now_iso
 from utils.auditUtils import log_event
-from utils.commonUtils import jsonFile, outputPath, riotApKey
+from utils.commonUtils import discordChannel, jsonFile, outputPath, riotApKey
 from utils.dataUtils import riotBackoffRemaining, riotBackoffTimestamp, update
 from utils.jsonUtils import openJsonFile, writeToJsonFile
 
@@ -244,6 +244,42 @@ async def force_leaderboard_refresh(actor=None):
     message = t(json_data, "leaderboard.refresh_done", updated=bool(updated), count=len(summoners))
     log_event("leaderboard_force_refresh", actor=actor, status="success", summary=message, details={"updated": bool(updated), "summoners": len(summoners)})
     return True, message, latest_json_data
+
+async def force_daily_rank_image(actor=None):
+    json_data = ensure_admin_state(load_json_data())
+    if riotBackoffRemaining() > 0:
+        retry_time = datetime.fromtimestamp(riotBackoffTimestamp()).strftime("%H:%M:%S")
+        message = t(json_data, "leaderboard.refresh_backoff", time=retry_time)
+        log_event("leaderboard_daily_image_force", actor=actor, status="error", summary=message)
+        return False, message, json_data
+
+    summoners, updated = update(True, True, returnData=True, generate=True)
+    status = "updated" if summoners else "skipped"
+    json_data = set_leaderboard_runtime_status(json_data, "daily_forced", status, estimate_leaderboard_api_calls(json_data), None if summoners else "Forced daily image refresh returned no summoners.")
+    if not summoners:
+        message = t(json_data, "leaderboard.daily_image_no_summoners")
+        set_daily_image_status("error", error=message, channel_id=str(discordChannel))
+        log_event("leaderboard_daily_image_force", actor=actor, status="error", summary=message)
+        return False, message, load_json_data()
+
+    channel = await get_discord_channel(discordChannel)
+    if not channel:
+        message = t(json_data, "leaderboard.daily_image_channel_not_found")
+        set_daily_image_status("error", error=message, channel_id=str(discordChannel))
+        log_event("leaderboard_daily_image_force", actor=actor, status="error", summary=message, details={"channelId": str(discordChannel)})
+        return False, message, load_json_data()
+
+    sent, result = await send_daily_rank_image(channel, json_data)
+    if sent:
+        latest_json_data = set_daily_image_status("sent", message_id=result, channel_id=str(discordChannel))
+        message = t(json_data, "leaderboard.daily_image_force_done", updated=bool(updated), count=len(summoners), message_id=result)
+        log_event("leaderboard_daily_image_force", actor=actor, status="success", summary=message, details={"updated": bool(updated), "summoners": len(summoners), "channelId": str(discordChannel), "messageId": result})
+        return True, message, latest_json_data
+
+    latest_json_data = set_daily_image_status("error", error=result, channel_id=str(discordChannel))
+    message = t(json_data, "leaderboard.daily_image_send_failed", error=result)
+    log_event("leaderboard_daily_image_force", actor=actor, status="error", summary=message, details={"channelId": str(discordChannel)})
+    return False, message, latest_json_data
 
 async def add_summoner_to_data(name, tagline, platform, region):
     json_data = load_json_data()
