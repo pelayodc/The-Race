@@ -47,4 +47,3 @@ The Race currently focuses on these Discord server workflows:
 - Riot API failures or 429 responses pause refresh behavior through the in-process backoff model.
 - Daily image posting depends on the configured daily channel and Discord file-send permissions.
 - Matchmaking separate voice channels require Discord permissions to manage channels and move members.
-- Documentation is staged in-repository; GitHub Wiki publication is a maintainer action.

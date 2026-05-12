@@ -90,7 +90,6 @@ Patch note example:
 - `src/`: bot runtime, Discord commands/events, admin panel, leaderboard, matchmaking, linked accounts, personal reports, state, localization, and utilities.
 - `src/Imgs/`: rank icons, champion icons, and generated/downloaded visual assets used by image rendering.
 - `docs/wiki/`: GitHub Wiki-ready documentation.
-- `specs/`: Spec Kit feature specifications, plans, and tasks.
 - `data.json`: local runtime state; do not commit real production data.
 
 See [Code Map](docs/wiki/Code-Map.md) and [State and Artifacts](docs/wiki/State-and-Artifacts.md) for details.
