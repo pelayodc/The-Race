@@ -1,5 +1,7 @@
 .idea/*
 .github/*
+!.github/workflows/
+!.github/workflows/**
 .specify/*
 .agents/*
 .vscode/*

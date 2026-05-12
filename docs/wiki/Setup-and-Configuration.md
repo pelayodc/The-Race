@@ -77,3 +77,4 @@ python3 src/main.py
 - Do not edit `data.json` while the bot is running unless you have stopped the bot and have a backup.
 - Do not treat generated PNG files as source data.
 - If Riot backoff is active, wait for it to expire instead of retrying repeatedly.
+- To publish documentation to GitHub Wiki, enable the repository wiki and use `scripts/publish_wiki.sh` or the `Publish GitHub Wiki` workflow.

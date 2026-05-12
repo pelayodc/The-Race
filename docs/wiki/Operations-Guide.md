@@ -88,3 +88,21 @@ The link state is mirrored into summoner records and the `discordLinks` map insi
 ## Data Backup
 
 The **Download data backup** admin action sends a timestamped copy of `data.json` and includes the audit log when present. Use this before manual data recovery or migration work.
+
+## Publishing the GitHub Wiki
+
+The repository keeps wiki source pages in `docs/wiki/`.
+
+Manual publication:
+
+```bash
+scripts/publish_wiki.sh
+```
+
+Automatic publication:
+
+- The `Publish GitHub Wiki` GitHub Actions workflow runs when `docs/wiki/**`, `scripts/publish_wiki.sh`, or the workflow file changes on `main` or `master`.
+- The workflow uses `GITHUB_TOKEN` to push to `<repository>.wiki.git`.
+- The GitHub Wiki must be enabled and initialized at least once in repository settings.
+
+If the wiki remote cannot be cloned, confirm that the wiki is enabled and that the repository token has permission to write contents.

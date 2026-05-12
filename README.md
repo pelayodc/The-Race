@@ -28,6 +28,8 @@ Detailed documentation is staged in [`docs/wiki/`](docs/wiki/) for GitHub Wiki p
 - [Troubleshooting](docs/wiki/Troubleshooting.md)
 - [Contributing to The Race](docs/wiki/Contributing-to-The-Race.md)
 
+The GitHub Wiki can be published manually with `scripts/publish_wiki.sh` or automatically through the `Publish GitHub Wiki` GitHub Actions workflow when `docs/wiki/**` changes on `main` or `master`.
+
 ## Quick Start
 
 ### Prerequisites

@@ -28,4 +28,4 @@ The Race is a League of Legends Discord bot for running ranked leaderboard and s
 
 ## Publication Note
 
-These pages are staged in `docs/wiki/` so they can be reviewed with code changes. To publish them, copy each markdown file into the GitHub Wiki using the same page title or filename.
+These pages are staged in `docs/wiki/` so they can be reviewed with code changes. Publish them manually with `scripts/publish_wiki.sh` or let the `Publish GitHub Wiki` GitHub Actions workflow sync them after changes land on `main` or `master`.
