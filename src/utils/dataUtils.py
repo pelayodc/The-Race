@@ -79,6 +79,26 @@ def calculateZScore(value, multiplier, mean, std):
     return ((value - mean) / std) * multiplier
 
 
+def highEloPlayerMatchesSummoner(player, summoner):
+    playerIds = {
+        str(value)
+        for value in (
+            player.get("puuid"),
+            player.get("summonerId"),
+        )
+        if value
+    }
+    summonerIds = {
+        str(value)
+        for value in (
+            summoner.puuid,
+            summoner.id,
+        )
+        if value
+    }
+    return bool(playerIds.intersection(summonerIds))
+
+
 def calculateMeanAndStd(data, matchId, stat):
     values = []
     for participant in data["matchData"][matchId]["info"]['participants']:
@@ -319,7 +339,10 @@ def fetchAllSummonerData(force, daily):
                 log_event("leaderboard_update_skipped", actor=system_actor(), status="error", summary=summary, details={"platform": platform})
                 return [], False
 
-            highEloPlayersData[platform] = sorted(combinedHighEloPlayers, key=lambda x: (-x["leaguePoints"], -x["wins"]))
+            highEloPlayersData[platform] = sorted(
+                combinedHighEloPlayers,
+                key=lambda x: (-int(x.get("leaguePoints", 0)), -int(x.get("wins", 0)))
+            )
             jsonData["highEloCache"][platform] = {
                 "timestamp": time.time(),
                 "players": highEloPlayersData[platform]
@@ -329,8 +352,8 @@ def fetchAllSummonerData(force, daily):
         for summoner in summoners:
             if summoner.tier in ["MASTER", "GRANDMASTER", "CHALLENGER"]:
                 platform = summoner.platform
-                for index, player in enumerate(highEloPlayersData[platform], start=1):
-                    if player["summonerId"] == summoner.id:
+                for index, player in enumerate(highEloPlayersData.get(platform, []), start=1):
+                    if highEloPlayerMatchesSummoner(player, summoner):
                         summoner.rank = index
                         break
 
