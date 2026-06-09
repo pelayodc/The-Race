@@ -219,6 +219,19 @@ def compact_number(value):
     except (TypeError, ValueError):
         return "-"
 
+def compact_table_number(value):
+    if value is None:
+        return "-"
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return "-"
+    if abs(number) >= 1000000:
+        return f"{number / 1000000:.1f}m"
+    if abs(number) >= 1000:
+        return f"{number / 1000:.1f}k"
+    return str(number)
+
 def percent_text(value):
     if value is None:
         return "-"
@@ -316,21 +329,105 @@ def match_leaders(participants):
         "kda": max(participants, key=participant_kda_ratio).get("participantId"),
     }
 
-def format_scoreboard_line(participant, leaders):
+def fixed_text(value, width):
+    text = str(value or "-").replace("`", "'")
+    if len(text) > width:
+        return text[:max(0, width - 1)] + "…"
+    return text.ljust(width)
+
+def compact_role(position):
+    role = (position or "-").upper()
+    aliases = {
+        "UTILITY": "SUP",
+        "SUPPORT": "SUP",
+        "BOTTOM": "ADC",
+        "MIDDLE": "MID",
+        "JUNGLE": "JNG",
+    }
+    return aliases.get(role, role[:3] if role != "-" else "-")
+
+def participant_badge_text(participant, leaders):
+    return participant_badges(participant, leaders).strip(" []")
+
+def scoreboard_table_header(json_data, include_kp=True, include_badges=True):
+    columns = [
+        "",
+        fixed_text(t(json_data, "personal_report.table_champion"), 10),
+        fixed_text(t(json_data, "personal_report.table_player"), 12),
+        fixed_text(t(json_data, "personal_report.table_role"), 4),
+        fixed_text(t(json_data, "personal_report.table_kda"), 7),
+        fixed_text(t(json_data, "personal_report.table_cs"), 3),
+        fixed_text(t(json_data, "personal_report.table_gold"), 5),
+        fixed_text(t(json_data, "personal_report.table_damage"), 5),
+        fixed_text(t(json_data, "personal_report.table_vision"), 3),
+    ]
+    if include_kp:
+        columns.append(fixed_text(t(json_data, "personal_report.table_kp"), 3))
+    if include_badges:
+        columns.append(t(json_data, "personal_report.table_tags"))
+    return " ".join(columns).rstrip()
+
+def format_scoreboard_table_line(participant, leaders, selected_participant_id=None, include_kp=True, include_badges=True):
     kda = f"{participant.get('kills', 0)}/{participant.get('deaths', 0)}/{participant.get('assists', 0)}"
     kp = percent_text((participant.get("challenges", {}) or {}).get("killParticipation"))
-    name = participant_name(participant)
-    if len(name) > 22:
-        name = f"{name[:19]}..."
-    champion = participant.get("championName", "Unknown")
-    if len(champion) > 13:
-        champion = f"{champion[:10]}..."
-    return (
-        f"`{champion:<13}` **{name}** ({participant_position(participant)}) "
-        f"{kda} | {participant_cs(participant)} CS | {compact_number(participant.get('goldEarned'))}g | "
-        f"{format_compact_damage(participant.get('totalDamageDealtToChampions'))} dmg | "
-        f"{participant.get('visionScore', 0)} vis | KP {kp}{participant_badges(participant, leaders)}"
+    marker = ">" if participant.get("participantId") == selected_participant_id else " "
+    values = [
+        marker,
+        fixed_text(participant.get("championName", "Unknown"), 10),
+        fixed_text(participant_name(participant), 12),
+        fixed_text(compact_role(participant_position(participant)), 4),
+        fixed_text(kda, 7),
+        fixed_text(participant_cs(participant), 3),
+        fixed_text(compact_table_number(participant.get("goldEarned")), 5),
+        fixed_text(compact_table_number(participant.get("totalDamageDealtToChampions")), 5),
+        fixed_text(participant.get("visionScore", 0), 3),
+    ]
+    if include_kp:
+        values.append(fixed_text(kp, 3))
+    if include_badges:
+        values.append(fixed_text(participant_badge_text(participant, leaders), 16).rstrip())
+    return " ".join(values).rstrip()
+
+def team_objective_text(json_data, team):
+    objectives = team.get("objectives", {}) or {}
+    return t(
+        json_data,
+        "personal_report.objective_summary",
+        towers=objectives.get("tower", {}).get("kills", 0),
+        dragons=objectives.get("dragon", {}).get("kills", 0),
+        herald=objectives.get("riftHerald", {}).get("kills", 0),
+        baron=objectives.get("baron", {}).get("kills", 0),
+        inhib=objectives.get("inhibitor", {}).get("kills", 0),
     )
+
+def team_scoreboard_summary(json_data, team_participants, team):
+    kills = sum(p.get("kills", 0) for p in team_participants)
+    gold = sum(p.get("goldEarned", 0) for p in team_participants)
+    damage = sum(p.get("totalDamageDealtToChampions", 0) for p in team_participants)
+    return (
+        f"{t(json_data, 'personal_report.team_summary', kills=kills, gold=compact_table_number(gold), damage=compact_table_number(damage))}\n"
+        f"{team_objective_text(json_data, team)}"
+    )
+
+def build_scoreboard_table(json_data, team_participants, leaders, selected_participant_id):
+    def build(include_kp=True, include_badges=True):
+        lines = [scoreboard_table_header(json_data, include_kp, include_badges)]
+        lines.extend(
+            format_scoreboard_table_line(participant, leaders, selected_participant_id, include_kp, include_badges)
+            for participant in team_participants
+        )
+        return "```text\n" + "\n".join(lines) + "\n```"
+
+    table = build(include_kp=True, include_badges=True)
+    if len(table) <= 900:
+        return table
+    table = build(include_kp=False, include_badges=True)
+    if len(table) <= 900:
+        return table
+    table = build(include_kp=False, include_badges=False)
+    if len(table) <= 900:
+        return table
+    return table[:1015] + "\n```"
 
 def personal_match_summary(participant, duration_seconds):
     minutes = max(1, duration_seconds / 60) if duration_seconds else 1
@@ -382,39 +479,44 @@ def match_detail_embed(json_data, summoner_name, game_index):
     kda = f"{participant.get('kills', 0)}/{participant.get('deaths', 0)}/{participant.get('assists', 0)}"
     duration = format_match_duration(info.get("gameDuration"))
     match_id = game.get("matchId")
+    game_mode = info.get("gameMode") or "-"
+    timeline_cached = match_id in (json_data.get("matchTimelineData") or {})
 
     embed = disnake.Embed(
-        title=f"Game {game_index + 1}: {participant.get('championName', 'Unknown')} - {result}",
-        description=f"Match: `{match_id}`\nPlayer: **{summoner_name}**\nKDA: **{kda}** - Duration: **{duration}**",
+        title=t(json_data, "personal_report.match_title", index=game_index + 1, champion=participant.get("championName", "Unknown"), result=result),
+        description=t(
+            json_data,
+            "personal_report.match_description",
+            match_id=match_id,
+            player=summoner_name,
+            kda=kda,
+            duration=duration,
+            mode=game_mode,
+            timeline=t(json_data, "common.yes") if timeline_cached else t(json_data, "common.no"),
+        ),
         colour=disnake.Colour.green() if participant.get("win") else disnake.Colour.red(),
         timestamp=datetime.now()
     )
     embed.add_field(name=t(json_data, "personal_report.personal_performance"), value=personal_match_summary(participant, info.get("gameDuration", 0)), inline=True)
 
-    timeline_cached = match_id in (json_data.get("matchTimelineData") or {})
-    embed.add_field(
-        name="Data freshness",
-        value=f"Match cached: **Yes**\nTimeline cached: **{'Yes' if timeline_cached else 'No'}**",
-        inline=True
-    )
+    teams = {team.get("teamId"): team for team in info.get("teams", [])}
 
-    for team_id, team_name in [(100, "Blue side"), (200, "Red side")]:
+    for team_id, team_name_key in [(100, "personal_report.blue_side"), (200, "personal_report.red_side")]:
         team_participants = [p for p in participants if p.get("teamId") == team_id]
-        lines = [format_scoreboard_line(p, leaders) for p in team_participants]
-        embed.add_field(name=team_name, value=("\n".join(lines) or "-")[:1024], inline=False)
+        team = teams.get(team_id) or {}
+        team_result = t(json_data, "personal_report.win") if team.get("win") else t(json_data, "personal_report.loss")
+        field_value = (
+            f"{team_scoreboard_summary(json_data, team_participants, team)}\n"
+            f"{build_scoreboard_table(json_data, team_participants, leaders, participant.get('participantId'))}"
+        )
+        embed.add_field(
+            name=f"{t(json_data, team_name_key)} - {team_result}",
+            value=(field_value or "-")[:1024],
+            inline=False
+        )
 
     embed.set_footer(text=t(json_data, "personal_report.badges_footer"))
     return embed, None
-
-def team_objective_text(team):
-    objectives = team.get("objectives", {}) or {}
-    return (
-        f"Towers {objectives.get('tower', {}).get('kills', 0)}, "
-        f"Dragons {objectives.get('dragon', {}).get('kills', 0)}, "
-        f"Herald {objectives.get('riftHerald', {}).get('kills', 0)}, "
-        f"Baron {objectives.get('baron', {}).get('kills', 0)}, "
-        f"Inhib {objectives.get('inhibitor', {}).get('kills', 0)}"
-    )
 
 def compare_teams_embed(json_data, summoner_name, game_index):
     context, error = cached_personal_game_context(json_data, summoner_name, game_index)
@@ -445,7 +547,7 @@ def compare_teams_embed(json_data, summoner_name, game_index):
                 f"Gold: **{compact_number(gold)}**\n"
                 f"Damage: **{compact_number(damage)}**\n"
                 f"Vision: **{vision}**\n"
-                f"{team_objective_text(teams.get(team_id) or {})}"
+                f"{team_objective_text(json_data, teams.get(team_id) or {})}"
             ),
             inline=True
         )
