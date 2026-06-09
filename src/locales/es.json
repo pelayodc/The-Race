@@ -138,6 +138,8 @@
   "leaderboard": {
     "title": "Solo/Duo Leaderboard",
     "daily_title": "Daily Solo/Duo Leaderboard - {date}",
+    "full_title": "Clasificación completa Solo/Duo",
+    "full_button": "Ver completa",
     "summoners": "Summoners",
     "ranks": "Rangos",
     "last_5": "Últimas 5",

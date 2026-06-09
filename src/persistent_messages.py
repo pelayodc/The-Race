@@ -2,7 +2,7 @@ import disnake
 
 from discord_helpers import delete_configured_message, fetch_configured_message, get_discord_channel
 from i18n import t
-from leaderboard import cached_leaderboard_summoners, send_or_edit_leaderboard
+from leaderboard import LeaderboardView, cached_leaderboard_summoners, send_or_edit_leaderboard
 from state import admin_channel_id, ensure_admin_state, ensure_matchmaking_state, leaderboard_channel_id, load_json_data, matchmaking_channel_id
 from utils.auditUtils import log_event
 from utils.commonUtils import jsonFile
@@ -98,7 +98,7 @@ async def configure_leaderboard_channel(channel, actor=None):
     if old_channel_id != channel.id:
         json_data["leaderboardMessageId"] = None
         if old_embed:
-            moved_message = await channel.send(embed=old_embed)
+            moved_message = await channel.send(embed=old_embed, view=LeaderboardView())
             json_data["leaderboardMessageId"] = moved_message.id
         await delete_configured_message(old_channel_id, old_message_id)
 

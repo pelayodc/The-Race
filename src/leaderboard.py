@@ -1,11 +1,12 @@
 from datetime import datetime
 import os
 from types import SimpleNamespace
+from urllib.parse import quote
 
 import disnake
 import requests
 
-from discord_helpers import get_discord_channel
+from discord_helpers import get_discord_channel, get_guild_member, send_ephemeral_response
 from i18n import t
 from linked_accounts import find_summoner_key, normalize_tagline, rebuild_discord_links_from_summoners
 from state import ensure_admin_state, leaderboard_channel_id, load_json_data, utc_now_iso
@@ -52,9 +53,52 @@ def recent_results_text(summoner):
             results.append("▫️")
     return "".join(results)
 
-def leaderboard_embed(summoners, daily=False, date_str=None):
-    json_data = load_json_data()
+
+def is_secondary_summoner(json_data, summoner):
+    summoner_data = (json_data.get("summoners") or {}).get(summoner.fullName, {})
+    return bool(summoner_data.get("discordUserId") and summoner_data.get("discordPrimary") is False)
+
+
+def truncate_display_name(display_name):
+    display_name = str(display_name)
+    if len(display_name) > 18:
+        return f"{display_name[:15]}..."
+    return display_name
+
+
+def escape_link_text(text):
+    return str(text).replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+
+async def discord_display_name_for_summoner(json_data, summoner, guild):
+    summoner_data = (json_data.get("summoners") or {}).get(summoner.fullName, {})
+    user_id = summoner_data.get("discordUserId")
+    if not user_id:
+        return None
+
+    if guild:
+        member = guild.get_member(int(user_id)) if str(user_id).isdigit() else None
+        if not member and str(user_id).isdigit():
+            member = await get_guild_member(guild, user_id)
+        if member:
+            return member.display_name
+
+    return summoner_data.get("discordDisplayName")
+
+
+async def leaderboard_display_name(json_data, summoner, guild, use_discord_display_names):
+    if use_discord_display_names:
+        discord_name = await discord_display_name_for_summoner(json_data, summoner, guild)
+        if discord_name:
+            return discord_name
+    return summoner.name
+
+
+async def leaderboard_embed(json_data, summoners, daily=False, date_str=None, guild=None, include_secondaries=False, use_discord_display_names=True, renumber_visible=True, title_key=None):
+    rebuild_discord_links_from_summoners(json_data)
     title = t(json_data, "leaderboard.title")
+    if title_key:
+        title = t(json_data, title_key)
     if daily:
         title = t(json_data, "leaderboard.daily_title", date=date_str)
 
@@ -68,19 +112,24 @@ def leaderboard_embed(summoners, daily=False, date_str=None):
     summoner_lines = []
     rank_lines = []
     results_lines = []
+    visible_position = 0
 
     for summoner in summoners:
-        rank = f"#{summoner.leaderboardPosition}"
+        if not include_secondaries and is_secondary_summoner(json_data, summoner):
+            continue
+
+        visible_position += 1
+        rank_value = visible_position if renumber_visible else summoner.leaderboardPosition
+        rank = f"#{rank_value}"
         raw_name = summoner.name
         tag = summoner.tagline
 
-        display_name = raw_name
-        if len(display_name) > 18:
-            display_name = f"{display_name[:15]}..."
+        display_name = await leaderboard_display_name(json_data, summoner, guild, use_discord_display_names)
+        display_name = truncate_display_name(display_name)
 
-        safe_game_name = raw_name.replace(" ", "%20")
-        safe_tag = tag.replace(" ", "%20")
-        name = f"[{display_name}](https://dpm.lol/{safe_game_name}-{safe_tag})"
+        safe_game_name = quote(raw_name, safe="")
+        safe_tag = quote(tag, safe="")
+        name = f"[{escape_link_text(display_name)}](https://dpm.lol/{safe_game_name}-{safe_tag})"
 
         score_delta = summoner.deltaDailyScore if daily else summoner.deltaScore
         position_delta = summoner.deltaDailyLeaderboardPosition if daily else summoner.deltaLeaderboardPosition
@@ -116,19 +165,54 @@ def leaderboard_embed(summoners, daily=False, date_str=None):
     embed.set_footer(text=t(json_data, "leaderboard.updated_footer"))
     return embed
 
+
+class LeaderboardView(disnake.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        json_data = ensure_admin_state(load_json_data())
+        for child in self.children:
+            if getattr(child, "custom_id", None) == "leaderboard:full":
+                child.label = t(json_data, "leaderboard.full_button")
+
+    @disnake.ui.button(label="Full leaderboard", style=disnake.ButtonStyle.blurple, custom_id="leaderboard:full")
+    async def full_leaderboard(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        json_data = ensure_admin_state(load_json_data())
+        summoners = cached_leaderboard_summoners(json_data)
+        embed = await leaderboard_embed(
+            json_data,
+            summoners,
+            guild=inter.guild,
+            include_secondaries=True,
+            use_discord_display_names=False,
+            renumber_visible=False,
+            title_key="leaderboard.full_title"
+        )
+        await send_ephemeral_response(inter, embed=embed)
+
+
 async def send_or_edit_leaderboard(channel, json_data, summoners, daily=False, date_str=None):
-    embed = leaderboard_embed(summoners, daily, date_str)
+    embed = await leaderboard_embed(
+        json_data,
+        summoners,
+        daily=daily,
+        date_str=date_str,
+        guild=getattr(channel, "guild", None),
+        include_secondaries=False,
+        use_discord_display_names=True,
+        renumber_visible=True
+    )
+    view = LeaderboardView()
     message_id = json_data.get("leaderboardMessageId")
 
     if message_id:
         try:
             message = await channel.fetch_message(int(message_id))
-            await message.edit(content=None, embed=embed)
+            await message.edit(content=None, embed=embed, view=view)
             return message.id
         except (disnake.NotFound, disnake.Forbidden, disnake.HTTPException, ValueError):
             pass
 
-    message = await channel.send(embed=embed)
+    message = await channel.send(embed=embed, view=view)
     return message.id
 
 async def send_daily_rank_image(channel, json_data):

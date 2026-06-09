@@ -9,7 +9,7 @@ import bot_runtime
 from admin_panel import AdminView
 from bot_runtime import TASKS
 from discord_helpers import get_discord_channel, send_temporary_public_message
-from leaderboard import estimate_leaderboard_api_calls, send_daily_rank_image, send_or_edit_leaderboard, set_daily_image_status, set_leaderboard_runtime_status
+from leaderboard import LeaderboardView, estimate_leaderboard_api_calls, send_daily_rank_image, send_or_edit_leaderboard, set_daily_image_status, set_leaderboard_runtime_status
 from matchmaking import MatchmakingView, delete_empty_matchmaking_team_channels, finish_captain_draft_if_complete, is_draft_complete, process_captain_draft_timeout, remove_player_from_matchmaking_draft, user_queue_index
 from persistent_messages import refresh_admin_message, refresh_configured_admin_message, refresh_matchmaking_message, setup_matchmaking_message
 from state import admin_channel_id, ensure_admin_state, ensure_matchmaking_state, leaderboard_channel_id, load_json_data, matchmaking_channel_id
@@ -27,6 +27,7 @@ def register_events(bot):
         if not bot_runtime.matchmaking_view_registered:
             bot.add_view(MatchmakingView())
             bot.add_view(AdminView())
+            bot.add_view(LeaderboardView())
             bot_runtime.matchmaking_view_registered = True
         await setup_matchmaking_message()
         json_data = load_json_data()
