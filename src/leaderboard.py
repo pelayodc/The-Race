@@ -54,6 +54,26 @@ def recent_results_text(summoner):
     return "".join(results)
 
 
+def hydrate_cached_recent_results(json_data, summoner, summoner_data):
+    match_data_by_id = json_data.get("matchData") or {}
+    for index, match_id in enumerate(summoner_data.get("recentMatchIds", [])[:5], start=1):
+        match_data = match_data_by_id.get(match_id) or {}
+        participants = match_data.get("info", {}).get("participants", [])
+        participant = next(
+            (
+                participant
+                for participant in participants
+                if participant.get("puuid") == summoner.puuid
+            ),
+            None
+        )
+        if not participant:
+            continue
+
+        setattr(summoner, f"game{index}Win", participant.get("win"))
+        setattr(summoner, f"game{index}Remake", participant.get("gameEndedInEarlySurrender", False))
+
+
 def is_secondary_summoner(json_data, summoner):
     summoner_data = (json_data.get("summoners") or {}).get(summoner.fullName, {})
     return bool(summoner_data.get("discordUserId") and summoner_data.get("discordPrimary") is False)
@@ -286,6 +306,7 @@ def cached_leaderboard_summoners(json_data):
             fullName=full_name,
             name=name,
             tagline=tagline,
+            puuid=data.get("puuid"),
             leaderboardPosition=data.get("leaderboardPosition", 100),
             tier=data.get("tier"),
             rank=data.get("rank"),
@@ -297,6 +318,7 @@ def cached_leaderboard_summoners(json_data):
             deltaLeaderboardPosition=0,
             deltaDailyLeaderboardPosition=0,
         )
+        hydrate_cached_recent_results(json_data, summoner, data)
         summoners.append(summoner)
     return sorted(summoners, key=lambda item: item.leaderboardPosition)
 
