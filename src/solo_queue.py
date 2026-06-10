@@ -4,6 +4,7 @@ from urllib.parse import quote
 import disnake
 
 from bot_runtime import MAX_SELECT_OPTIONS, bot
+from discord_helpers import get_guild_member
 from i18n import t
 from state import ensure_admin_state, load_json_data, utc_now_iso
 from utils.auditUtils import log_event, system_actor
@@ -58,6 +59,22 @@ def visible_solo_queue_targets(json_data, summoners, limit=None):
         if limit and len(targets) >= limit:
             break
     return targets
+
+
+async def refresh_target_display_names(targets, guild):
+    if not guild:
+        return targets
+
+    refreshed = []
+    for target in targets:
+        player_id = str(target.get("playerId") or "")
+        member = guild.get_member(int(player_id)) if player_id.isdigit() else None
+        if not member and player_id.isdigit():
+            member = await get_guild_member(guild, player_id)
+        if member:
+            target = {**target, "displayName": member.display_name}
+        refreshed.append(target)
+    return refreshed
 
 
 def solo_queue_player_id(json_data, summoner):

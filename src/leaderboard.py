@@ -9,7 +9,7 @@ import requests
 from discord_helpers import get_discord_channel, get_guild_member, send_ephemeral_response
 from i18n import t
 from linked_accounts import find_summoner_key, normalize_tagline, rebuild_discord_links_from_summoners
-from solo_queue import add_solo_queue_icon, is_subscribed, subscription_targets, toggle_subscription
+from solo_queue import add_solo_queue_icon, is_subscribed, refresh_target_display_names, subscription_targets, toggle_subscription
 from state import ensure_admin_state, leaderboard_channel_id, load_json_data, utc_now_iso
 from utils.auditUtils import log_event
 from utils.commonUtils import discordChannel, jsonFile, outputPath, riotApKey
@@ -218,6 +218,7 @@ class LeaderboardView(disnake.ui.View):
         json_data = ensure_admin_state(load_json_data())
         summoners = cached_leaderboard_summoners(json_data)
         targets = subscription_targets(json_data, summoners)
+        targets = await refresh_target_display_names(targets, inter.guild)
         if not targets:
             await send_ephemeral_response(inter, t(json_data, "solo_queue.no_targets"))
             return
@@ -259,6 +260,7 @@ class SoloQueueSubscriptionSelect(disnake.ui.Select):
         success, message = await toggle_subscription(json_data, inter.author.id, target)
         latest_json_data = ensure_admin_state(load_json_data())
         targets = subscription_targets(latest_json_data, cached_leaderboard_summoners(latest_json_data))
+        targets = await refresh_target_display_names(targets, inter.guild)
         view = SoloQueueSubscriptionView(latest_json_data, inter.author.id, targets) if targets else None
         await inter.edit_original_message(content=message, view=view)
 
