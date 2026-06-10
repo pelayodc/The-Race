@@ -5,7 +5,8 @@ import requests
 from PIL import ImageFont
 from PIL import Image, ImageDraw
 
-from .commonUtils import version, Rank, assetPath, outputPath
+from .commonUtils import version, Rank, assetPath, outputPath, jsonFile
+from .jsonUtils import openJsonFile
 
 
 def drawChampionPlaceholder(canvas, x, y, size):
@@ -493,6 +494,17 @@ def drawSummonerRow(canvas, summoner, index, y, daily, icons, hotStreakIcon, col
 
 
 def generateImage(summones, daily):
+    if daily:
+        json_data = openJsonFile(jsonFile) or {}
+        summoners_data = json_data.get("summoners") or {}
+        summones = [
+            summoner for summoner in summones
+            if not (
+                summoners_data.get(summoner.fullName, {}).get("discordUserId")
+                and summoners_data.get(summoner.fullName, {}).get("discordPrimary") is False
+            )
+        ]
+
     canvasWidth = 1820
     headerHeight = 130
     rowHeight = 124

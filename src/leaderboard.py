@@ -9,7 +9,7 @@ import requests
 from discord_helpers import get_discord_channel, get_guild_member, send_ephemeral_response
 from i18n import t
 from linked_accounts import find_summoner_key, normalize_tagline, rebuild_discord_links_from_summoners
-from solo_queue import add_solo_queue_icon, is_subscribed, refresh_target_display_names, subscription_targets, toggle_subscription
+from solo_queue import add_solo_queue_icon, is_secondary_summoner_data, is_summoner_in_solo_queue, refresh_target_display_names, subscription_targets, toggle_subscription
 from state import ensure_admin_state, leaderboard_channel_id, load_json_data, utc_now_iso
 from utils.auditUtils import log_event
 from utils.commonUtils import discordChannel, jsonFile, outputPath, riotApKey
@@ -39,7 +39,7 @@ def delta_text(value):
         return f" ({value})"
     return ""
 
-def recent_results_text(summoner):
+def recent_results_text(summoner, in_solo_queue=False):
     results = []
     for game in range(1, 6):
         remake = getattr(summoner, f"game{game}Remake", False)
@@ -52,6 +52,8 @@ def recent_results_text(summoner):
             results.append("❌")
         else:
             results.append("▫️")
+    if in_solo_queue:
+        results[-1] = "🎮"
     return "".join(results)
 
 
@@ -76,8 +78,7 @@ def hydrate_cached_recent_results(json_data, summoner, summoner_data):
 
 
 def is_secondary_summoner(json_data, summoner):
-    summoner_data = (json_data.get("summoners") or {}).get(summoner.fullName, {})
-    return bool(summoner_data.get("discordUserId") and summoner_data.get("discordPrimary") is False)
+    return is_secondary_summoner_data(json_data, summoner)
 
 
 def truncate_display_name(display_name):
@@ -136,6 +137,7 @@ async def leaderboard_embed(json_data, summoners, daily=False, date_str=None, gu
     visible_position = 0
 
     for summoner in summoners:
+        hydrate_cached_recent_results(json_data, summoner, (json_data.get("summoners") or {}).get(summoner.fullName, {}))
         if not include_secondaries and is_secondary_summoner(json_data, summoner):
             continue
 
@@ -164,7 +166,7 @@ async def leaderboard_embed(json_data, summoners, daily=False, date_str=None, gu
         lp = f"{summoner.leaguePoints} LP"
         line_left = f"**{rank}** {name}"
         line_right = f"{rank_icon(summoner.tier)} {tier_rank} - **{lp}** {lp_delta}".rstrip()
-        line_results = recent_results_text(summoner)
+        line_results = recent_results_text(summoner, is_summoner_in_solo_queue(json_data, summoner))
         if position_delta > 0:
             line_left += " ▲"
         elif position_delta < 0:

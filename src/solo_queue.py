@@ -39,6 +39,18 @@ def is_visible_primary_summoner(json_data, summoner):
     return bool(data.get("discordUserId") and data.get("discordPrimary") is not False)
 
 
+def is_secondary_summoner_data(json_data, summoner):
+    data = summoner_data(json_data, summoner)
+    return bool(data.get("discordUserId") and data.get("discordPrimary") is False)
+
+
+def visible_primary_summoners(json_data, summoners):
+    return [
+        summoner for summoner in summoners
+        if not is_secondary_summoner_data(json_data, summoner)
+    ]
+
+
 def visible_solo_queue_targets(json_data, summoners, limit=None):
     targets = []
     seen_player_ids = set()
@@ -90,9 +102,13 @@ def is_player_in_solo_queue(json_data, player_id):
     return bool(status.get("inGame"))
 
 
-def add_solo_queue_icon(json_data, summoner, linked_name):
+def is_summoner_in_solo_queue(json_data, summoner):
     player_id = solo_queue_player_id(json_data, summoner)
-    if player_id and is_player_in_solo_queue(json_data, player_id):
+    return bool(player_id and is_player_in_solo_queue(json_data, player_id))
+
+
+def add_solo_queue_icon(json_data, summoner, linked_name):
+    if is_summoner_in_solo_queue(json_data, summoner):
         return f"{SOLO_QUEUE_ICON} {linked_name}"
     return linked_name
 
