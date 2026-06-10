@@ -9,6 +9,7 @@ import requests
 from discord_helpers import get_discord_channel, get_guild_member, send_ephemeral_response
 from i18n import t
 from linked_accounts import find_summoner_key, normalize_tagline, rebuild_discord_links_from_summoners
+from solo_queue import add_solo_queue_icon, is_subscribed, subscription_targets, toggle_subscription
 from state import ensure_admin_state, leaderboard_channel_id, load_json_data, utc_now_iso
 from utils.auditUtils import log_event
 from utils.commonUtils import discordChannel, jsonFile, outputPath, riotApKey
@@ -149,7 +150,8 @@ async def leaderboard_embed(json_data, summoners, daily=False, date_str=None, gu
 
         safe_game_name = quote(raw_name, safe="")
         safe_tag = quote(tag, safe="")
-        name = f"[{escape_link_text(display_name)}](https://dpm.lol/{safe_game_name}-{safe_tag})"
+        linked_name = f"[{escape_link_text(display_name)}](https://dpm.lol/{safe_game_name}-{safe_tag})"
+        name = add_solo_queue_icon(json_data, summoner, linked_name)
 
         score_delta = summoner.deltaDailyScore if daily else summoner.deltaScore
         position_delta = summoner.deltaDailyLeaderboardPosition if daily else summoner.deltaLeaderboardPosition
@@ -193,6 +195,8 @@ class LeaderboardView(disnake.ui.View):
         for child in self.children:
             if getattr(child, "custom_id", None) == "leaderboard:full":
                 child.label = t(json_data, "leaderboard.full_button")
+            elif getattr(child, "custom_id", None) == "leaderboard:subscriptions":
+                child.label = t(json_data, "solo_queue.subscriptions_button")
 
     @disnake.ui.button(label="Full leaderboard", style=disnake.ButtonStyle.blurple, custom_id="leaderboard:full")
     async def full_leaderboard(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
@@ -208,6 +212,60 @@ class LeaderboardView(disnake.ui.View):
             title_key="leaderboard.full_title"
         )
         await send_ephemeral_response(inter, embed=embed)
+
+    @disnake.ui.button(label="Subscriptions", style=disnake.ButtonStyle.gray, custom_id="leaderboard:subscriptions")
+    async def subscriptions(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        json_data = ensure_admin_state(load_json_data())
+        summoners = cached_leaderboard_summoners(json_data)
+        targets = subscription_targets(json_data, summoners)
+        if not targets:
+            await send_ephemeral_response(inter, t(json_data, "solo_queue.no_targets"))
+            return
+        await send_ephemeral_response(
+            inter,
+            t(json_data, "solo_queue.menu_description"),
+            view=SoloQueueSubscriptionView(json_data, inter.author.id, targets)
+        )
+
+
+class SoloQueueSubscriptionSelect(disnake.ui.Select):
+    def __init__(self, json_data, subscriber_id, targets):
+        self.subscriber_id = str(subscriber_id)
+        self.targets = {target["playerId"]: target for target in targets}
+        options = []
+        for target in targets:
+            subscribed = is_subscribed(json_data, self.subscriber_id, target["playerId"])
+            label_prefix = "✓ " if subscribed else ""
+            options.append(disnake.SelectOption(
+                label=f"{label_prefix}{target['displayName']}"[:100],
+                description=target["summonerFullName"][:100],
+                value=target["playerId"]
+            ))
+        super().__init__(
+            placeholder=t(json_data, "solo_queue.select_placeholder"),
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="leaderboard:subscriptions:select"
+        )
+
+    async def callback(self, inter: disnake.MessageInteraction):
+        json_data = ensure_admin_state(load_json_data())
+        target = self.targets.get(self.values[0])
+        if not target:
+            await inter.response.edit_message(content=t(json_data, "solo_queue.target_missing"), view=None)
+            return
+        success, message = await toggle_subscription(json_data, inter.author.id, target)
+        latest_json_data = ensure_admin_state(load_json_data())
+        targets = subscription_targets(latest_json_data, cached_leaderboard_summoners(latest_json_data))
+        view = SoloQueueSubscriptionView(latest_json_data, inter.author.id, targets) if targets else None
+        await inter.response.edit_message(content=message, view=view)
+
+
+class SoloQueueSubscriptionView(disnake.ui.View):
+    def __init__(self, json_data, subscriber_id, targets):
+        super().__init__(timeout=120)
+        self.add_item(SoloQueueSubscriptionSelect(json_data, subscriber_id, targets))
 
 
 async def send_or_edit_leaderboard(channel, json_data, summoners, daily=False, date_str=None):
@@ -261,6 +319,10 @@ def format_summoner_summary(json_data):
 def estimate_leaderboard_api_calls(json_data):
     summoners = json_data.get("summoners") or {}
     estimated_calls = len(summoners)
+    estimated_calls += len([
+        data for data in summoners.values()
+        if data.get("discordUserId") and data.get("discordPrimary") is not False and data.get("tier") and data.get("rank")
+    ])
     now = datetime.now().timestamp()
     high_elo_cache = json_data.get("highEloCache") or {}
     for cache in high_elo_cache.values():
@@ -311,6 +373,7 @@ def cached_leaderboard_summoners(json_data):
             tier=data.get("tier"),
             rank=data.get("rank"),
             leaguePoints=data.get("leaguePoints", 0),
+            score=data.get("score", 0),
             deltaScore=0,
             deltaDailyScore=0,
             deltaGamesPlayed=0,

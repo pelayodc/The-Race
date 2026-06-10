@@ -160,6 +160,21 @@
     "not_added": "{summoner} non è stato aggiunto",
     "removed": "{summoner} rimosso"
   },
+  "solo_queue": {
+    "subscriptions_button": "Iscrizioni",
+    "select_placeholder": "Scegli un giocatore per attivare/disattivare l'iscrizione",
+    "menu_description": "Scegli un giocatore per iscriverti o annullare l'iscrizione alle sue SoloQ.",
+    "no_targets": "Nessun giocatore visibile disponibile per le iscrizioni.",
+    "target_missing": "Quel giocatore non è più disponibile.",
+    "subscribed": "Iscrizione attivata per {summoner}.",
+    "unsubscribed": "Iscrizione annullata per {summoner}.",
+    "dm_closed": "Non sono riuscito a inviarti un DM. Attiva i messaggi privati del server e riprova.",
+    "dm_confirmed": "Iscrizione confermata per {summoner}. Ti avviserò qui quando inizia e finisce una SoloQ.",
+    "dm_started": "{summoner} ha iniziato una SoloQ ({tier} {rank}, {lp} LP).\n{url}",
+    "dm_finished": "{summoner} ha terminato una SoloQ: {result}. Variazione: {lp_delta}.\n{url}",
+    "win": "Vittoria",
+    "loss": "Sconfitta"
+  },
   "linked_accounts": {
     "no_links": "Nessun account collegato configurato.",
     "no_requests": "Nessuna richiesta di collegamento in sospeso.",

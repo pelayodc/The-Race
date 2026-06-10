@@ -12,6 +12,7 @@ from discord_helpers import get_discord_channel, send_temporary_public_message
 from leaderboard import LeaderboardView, estimate_leaderboard_api_calls, send_daily_rank_image, send_or_edit_leaderboard, set_daily_image_status, set_leaderboard_runtime_status
 from matchmaking import MatchmakingView, delete_empty_matchmaking_team_channels, finish_captain_draft_if_complete, is_draft_complete, process_captain_draft_timeout, remove_player_from_matchmaking_draft, user_queue_index
 from persistent_messages import refresh_admin_message, refresh_configured_admin_message, refresh_matchmaking_message, setup_matchmaking_message
+from solo_queue import update_solo_queue_status
 from state import admin_channel_id, ensure_admin_state, ensure_matchmaking_state, leaderboard_channel_id, load_json_data, matchmaking_channel_id
 from utils.auditUtils import log_event, system_actor
 from utils.commonUtils import dailyPostTimer, discordChannel, jsonFile, requestLimit
@@ -163,12 +164,16 @@ def register_events(bot):
             status = "updated" if summoners and (updated or force_leaderboard) else "no_changes" if summoners else "skipped"
             json_data = set_leaderboard_runtime_status(json_data, "normal", status, estimated_calls, None if summoners else "Leaderboard update returned no summoners.")
             log_event("leaderboard_update", actor=system_actor(), status="success" if summoners else "error", summary=f"Normal leaderboard update {status}.", details={"updated": bool(updated), "force": bool(force_leaderboard), "summoners": len(summoners or [])})
-            if summoners and (updated or force_leaderboard):
+            solo_queue_changed = False
+            if summoners:
+                latest_json_data = openJsonFile(jsonFile) or json_data
+                solo_queue_changed, latest_json_data = await update_solo_queue_status(latest_json_data, summoners)
+            if summoners and (updated or force_leaderboard or solo_queue_changed):
                 channel = await get_discord_channel(leaderboard_channel_id(json_data))
                 if not channel:
                     log_event("leaderboard_update", actor=system_actor(), status="error", summary="Leaderboard channel was not found.", details={"channelId": str(leaderboard_channel_id(json_data))})
                     return
-                latest_json_data = openJsonFile(jsonFile)
+                latest_json_data = openJsonFile(jsonFile) or json_data
                 latest_json_data['leaderboardMessageId'] = await send_or_edit_leaderboard(channel, latest_json_data, summoners)
                 writeToJsonFile(jsonFile, latest_json_data)
             await refresh_configured_admin_message()

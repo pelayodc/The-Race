@@ -73,6 +73,40 @@ def riot_get(url, context):
         return False, None, None
 
 
+def riot_get_status(url, context, allowed_statuses=None):
+    global riotBackoffUntil
+
+    allowed_statuses = allowed_statuses or []
+    if riotBackoffRemaining() > 0:
+        return False, None, riotBackoffRemaining(), None
+
+    response = requests.get(url)
+    if response.status_code in allowed_statuses:
+        return True, None, None, response.status_code
+
+    if response.status_code == 429:
+        retryAfter = int(response.headers.get("Retry-After", 60))
+        riotBackoffUntil = time.time() + retryAfter
+        summary = f"Riot rate limited {context}. Retrying after {retryAfter} seconds."
+        print(summary)
+        record_riot_error(context, summary, {"statusCode": 429, "retryAfter": retryAfter})
+        return False, None, retryAfter, response.status_code
+
+    if response.status_code != 200:
+        summary = f"Failed Riot request for {context}: status code {response.status_code}"
+        print(f"{summary}, response: {response.text[:200]}")
+        record_riot_error(context, summary, {"statusCode": response.status_code, "responseSnippet": response.text[:200]})
+        return False, None, None, response.status_code
+
+    try:
+        return True, response.json(), None, response.status_code
+    except ValueError as error:
+        summary = f"Failed to decode Riot response for {context}"
+        print(f"{summary}: {error}")
+        record_riot_error(context, summary, {"error": str(error)})
+        return False, None, None, response.status_code
+
+
 def calculateZScore(value, multiplier, mean, std):
     if mean is None or std is None or std == 0:
         return 0

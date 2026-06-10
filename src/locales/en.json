@@ -160,6 +160,21 @@
     "not_added": "{summoner} has not been added",
     "removed": "{summoner} removed"
   },
+  "solo_queue": {
+    "subscriptions_button": "Subscriptions",
+    "select_placeholder": "Choose a player to toggle subscription",
+    "menu_description": "Choose a player to subscribe or unsubscribe from their SoloQ games.",
+    "no_targets": "No visible players are available for subscriptions.",
+    "target_missing": "That player is no longer available.",
+    "subscribed": "Subscription enabled for {summoner}.",
+    "unsubscribed": "Subscription cancelled for {summoner}.",
+    "dm_closed": "I could not send you a DM. Enable server direct messages and try again.",
+    "dm_confirmed": "Subscription confirmed for {summoner}. I will notify you here when they start and finish a SoloQ.",
+    "dm_started": "{summoner} started a SoloQ ({tier} {rank}, {lp} LP).\n{url}",
+    "dm_finished": "{summoner} finished a SoloQ: {result}. Change: {lp_delta}.\n{url}",
+    "win": "Win",
+    "loss": "Loss"
+  },
   "linked_accounts": {
     "no_links": "No linked accounts configured.",
     "no_requests": "No pending link requests.",

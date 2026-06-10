@@ -160,6 +160,21 @@
     "not_added": "{summoner} n'a pas été ajouté",
     "removed": "{summoner} supprimé"
   },
+  "solo_queue": {
+    "subscriptions_button": "Abonnements",
+    "select_placeholder": "Choisis un joueur pour activer/désactiver l'abonnement",
+    "menu_description": "Choisis un joueur pour t'abonner ou te désabonner de ses parties SoloQ.",
+    "no_targets": "Aucun joueur visible disponible pour les abonnements.",
+    "target_missing": "Ce joueur n'est plus disponible.",
+    "subscribed": "Abonnement activé pour {summoner}.",
+    "unsubscribed": "Abonnement annulé pour {summoner}.",
+    "dm_closed": "Je n'ai pas pu t'envoyer de DM. Active les messages privés du serveur puis réessaie.",
+    "dm_confirmed": "Abonnement confirmé pour {summoner}. Je te préviendrai ici quand une SoloQ commence et se termine.",
+    "dm_started": "{summoner} a commencé une SoloQ ({tier} {rank}, {lp} LP).\n{url}",
+    "dm_finished": "{summoner} a terminé une SoloQ : {result}. Changement : {lp_delta}.\n{url}",
+    "win": "Victoire",
+    "loss": "Défaite"
+  },
   "linked_accounts": {
     "no_links": "Aucun compte lié configuré.",
     "no_requests": "Aucune demande de liaison en attente.",

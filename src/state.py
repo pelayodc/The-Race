@@ -86,6 +86,9 @@ def ensure_admin_state(json_data):
     json_data.setdefault("leaderboardLastDailyImageMessageId", None)
     json_data.setdefault("leaderboardLastDailyImageChannelId", None)
     json_data.setdefault("leaderboardLastDailyImageError", None)
+    json_data.setdefault("soloQueueStatus", {})
+    json_data.setdefault("soloQueueSubscriptions", {})
+    json_data.setdefault("soloQueuePendingFinish", {})
     json_data.setdefault("lastRiotError", None)
     return json_data
 
