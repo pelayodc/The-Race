@@ -360,15 +360,24 @@ def fetchAllSummonerData(force, daily):
             ]
 
             combinedHighEloPlayers = []
+            highEloFetchFailed = False
             for url in urls:
                 ok, data, retryAfter = riot_get(url, f"high elo data for {platform}")
                 if not ok:
-                    failedSummoners.append(f"high elo cache {platform}")
+                    highEloFetchFailed = True
                     break
                 combinedHighEloPlayers.extend(data.get("entries", []))
 
-            if failedSummoners:
-                summary = f"Skipping leaderboard update because high elo data failed for {platform}"
+            if highEloFetchFailed:
+                cachedPlayers = cache.get("players", [])
+                if cachedPlayers:
+                    highEloPlayersData[platform] = cachedPlayers
+                    summary = f"Using stale high elo cache for {platform} because Riot high elo data failed."
+                    print(summary)
+                    log_event("leaderboard_high_elo_cache_stale", actor=system_actor(), status="error", summary=summary, details={"platform": platform, "cacheAgeSeconds": int(time.time() - cache.get("timestamp", 0))})
+                    continue
+
+                summary = f"Skipping leaderboard update because high elo data failed for {platform} and no cache is available"
                 print(summary)
                 log_event("leaderboard_update_skipped", actor=system_actor(), status="error", summary=summary, details={"platform": platform})
                 return [], False

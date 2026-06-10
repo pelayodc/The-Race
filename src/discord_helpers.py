@@ -49,6 +49,9 @@ async def delete_interaction_original_later(inter, delay_seconds=EPHEMERAL_DELET
 async def send_ephemeral_response(inter, message=None, **kwargs):
     if message is None and "content" in kwargs:
         message = kwargs.pop("content")
+    if inter.response.is_done():
+        await send_ephemeral_followup(inter, message, **kwargs)
+        return
     await inter.response.send_message(message, ephemeral=True, **kwargs)
     asyncio.create_task(delete_interaction_original_later(inter))
 
