@@ -250,16 +250,17 @@ class SoloQueueSubscriptionSelect(disnake.ui.Select):
         )
 
     async def callback(self, inter: disnake.MessageInteraction):
+        await inter.response.defer(ephemeral=True)
         json_data = ensure_admin_state(load_json_data())
         target = self.targets.get(self.values[0])
         if not target:
-            await inter.response.edit_message(content=t(json_data, "solo_queue.target_missing"), view=None)
+            await inter.edit_original_message(content=t(json_data, "solo_queue.target_missing"), view=None)
             return
         success, message = await toggle_subscription(json_data, inter.author.id, target)
         latest_json_data = ensure_admin_state(load_json_data())
         targets = subscription_targets(latest_json_data, cached_leaderboard_summoners(latest_json_data))
         view = SoloQueueSubscriptionView(latest_json_data, inter.author.id, targets) if targets else None
-        await inter.response.edit_message(content=message, view=view)
+        await inter.edit_original_message(content=message, view=view)
 
 
 class SoloQueueSubscriptionView(disnake.ui.View):
