@@ -15,3 +15,5 @@
 /src/Rank list.png
 __pycache__/
 *.pyc
+.coverage
+coverage.xml

@@ -11,6 +11,9 @@ on:
       - master
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -67,4 +70,20 @@ jobs:
           PY
 
       - name: Run tests
-        run: pytest --cov=src --cov-report=term-missing
+        run: pytest --cov=src --cov-report=term-missing --cov-report=xml
+
+      - name: Generate coverage badge
+        run: genbadge coverage --local -i coverage.xml -o img/coverage.svg
+
+      - name: Commit coverage badge
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        run: |
+          if git diff --quiet -- img/coverage.svg; then
+            echo "Coverage badge unchanged."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add img/coverage.svg
+          git commit -m "Update coverage badge"
+          git push

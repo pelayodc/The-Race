@@ -2,6 +2,8 @@
 
 # The Race
 
+![Coverage](img/coverage.svg)
+
 The Race is a League of Legends Discord bot for running a Solo/Duo leaderboard and related server workflows. It tracks ranked progress, daily LP movement, recent games, MVP/crown status, patch notes, linked Discord accounts, personal reports, and matchmaking queues from Discord.
 
 ## Features
