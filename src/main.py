@@ -1,10 +1,12 @@
 from bot_commands import register_commands
 from bot_events import register_events
 from bot_runtime import bot
-from utils.commonUtils import discordToken
+from storage import initialize_storage
+from utils.commonUtils import discordToken, jsonFile
 
 
 def main():
+    initialize_storage(jsonFile)
     register_events(bot)
     register_commands(bot)
 

@@ -1,6 +1,6 @@
 # The Race Wiki
 
-The Race is a League of Legends Discord bot for running ranked leaderboard and server coordination workflows from Discord. It combines Riot API data, Discord slash commands, persistent admin/matchmaking messages, JSON runtime state, audit logs, and generated rank images.
+The Race is a League of Legends Discord bot for running ranked leaderboard and server coordination workflows from Discord. It combines Riot API data, Discord slash commands, persistent admin/matchmaking messages, PostgreSQL runtime state, audit logs, and generated rank images.
 
 ## Primary Audiences
 

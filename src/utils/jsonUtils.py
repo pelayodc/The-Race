@@ -8,6 +8,12 @@ _json_lock = threading.RLock()
 
 
 def openJsonFile(filePath):
+    from utils.commonUtils import jsonFile as stateJsonFile
+    from storage import database_enabled, load_state
+
+    if database_enabled() and os.path.abspath(filePath) == os.path.abspath(stateJsonFile):
+        return load_state(filePath)
+
     try:
         with _json_lock:
             with open(filePath, 'r', encoding='utf-8') as jsonFile:
@@ -22,6 +28,13 @@ def openJsonFile(filePath):
 
 
 def writeToJsonFile(filePath, data):
+    from utils.commonUtils import jsonFile as stateJsonFile
+    from storage import database_enabled, save_state
+
+    if database_enabled() and os.path.abspath(filePath) == os.path.abspath(stateJsonFile):
+        save_state(data)
+        return
+
     directory = os.path.dirname(os.path.abspath(filePath)) or "."
     os.makedirs(directory, exist_ok=True)
     tempPath = None

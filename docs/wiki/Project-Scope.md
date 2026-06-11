@@ -38,7 +38,7 @@ The Race currently focuses on these Discord server workflows:
 - Discord API through `disnake`.
 - Riot API with a valid `RIOT_API_KEY`.
 - Data Dragon for champion and patch-related assets.
-- Local JSON persistence through `data.json`.
+- PostgreSQL persistence for runtime state, caches, subscriptions, and operational status.
 - Local image assets in `src/Imgs/` and generated PNG outputs.
 
 ## Current Limitations

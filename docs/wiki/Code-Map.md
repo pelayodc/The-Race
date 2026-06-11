@@ -24,6 +24,7 @@ Maintenance notes:
 
 - `src/admin_panel.py`: admin embeds and views for settings, leaderboard users, linked accounts, matchmaking, status/logs, health checks, backups, force refreshes, and audit views.
 - `src/persistent_messages.py`: creates, edits, moves, refreshes, and recreates admin, leaderboard, and matchmaking persistent messages.
+- `src/storage.py`: initializes PostgreSQL, migrates legacy JSON, exports backups, and persists runtime state and audit events.
 
 Maintenance notes:
 
@@ -76,7 +77,7 @@ Maintenance notes:
 - `src/state.py`: channel ID resolution, admin/matchmaking state defaults, effective settings, labels, and role normalization.
 - `src/utils/jsonUtils.py`: JSON file read/write helpers.
 - `src/utils/auditUtils.py`: audit actors, JSONL event logging, recent error lookup, and log trimming.
-- `data.json`: runtime state file, not source code.
+- PostgreSQL: runtime state store for summoners, caches, matchmaking, SoloQ subscriptions, persistent message IDs, and audit events.
 
 Maintenance notes:
 

@@ -15,13 +15,11 @@ Use [[Code Map|Code-Map]] before editing:
 - Personal reports: `src/personal_report.py`.
 - Translations: `src/i18n.py`, `src/locales/`.
 
-## Constitution-Driven Expectations
-
-The project constitution in `.specify/memory/constitution.md` defines the working rules:
+## Project Expectations
 
 - Preserve Riot/Discord reliability and respect backoff.
 - Keep Discord UX consistent and use established admin permission checks.
-- Protect `data.json` state shape and generated artifact boundaries.
+- Protect PostgreSQL state shape, legacy migration compatibility, and generated artifact boundaries.
 - Verify changes according to risk.
 - Prefer small, local changes over broad rewrites.
 
@@ -45,7 +43,7 @@ The expected result is `{}`.
 
 ## State and Generated Artifact Safety
 
-- Do not commit real production `data.json` content.
+- Do not commit real production database exports or legacy JSON backups.
 - Add durable state defaults through `src/state.py` helpers when practical.
 - Treat `Rank list.png` and `Daily Rank list.png` as generated outputs.
 - Stop the bot and take a backup before manual state recovery.
@@ -56,6 +54,8 @@ The expected result is `{}`.
 Use verification that matches the change:
 
 - Python syntax/import-only change: `python3 -m py_compile` for touched modules.
+- General behavior change: `pytest -m "not postgres"`.
+- Storage, backup, migration, or persistence change: `pytest` with `DATABASE_URL` configured.
 - Locale change: `validate_locale_keys()`.
 - Leaderboard/Riot behavior: verify backoff, status fields, audit logs, and no unnecessary Riot calls.
 - Discord admin control: verify permission guard, ephemeral feedback, audit log, and persistent message refresh.

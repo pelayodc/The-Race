@@ -144,7 +144,7 @@ async def toggle_subscription(json_data, subscriber_id, target):
     ensure_solo_queue_state(json_data)
     subscriber_id = str(subscriber_id)
     player_id = str(target["playerId"])
-    subscriptions = json_data["soloQueueSubscriptions"].setdefault(subscriber_id, [])
+    subscriptions = list(json_data["soloQueueSubscriptions"].get(subscriber_id, []))
     subscriptions = [str(value) for value in subscriptions]
 
     if player_id in subscriptions:

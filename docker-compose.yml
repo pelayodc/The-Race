@@ -1,0 +1,34 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-therace}
+      POSTGRES_USER: ${POSTGRES_USER:-therace}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-therace}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-therace} -d ${POSTGRES_DB:-therace}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  bot:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://therace:therace@db:5432/therace}
+      AUTO_MIGRATE_JSON: ${AUTO_MIGRATE_JSON:-true}
+      DATA_JSON: ${DATA_JSON:-/app/data.json}
+    # To import a legacy JSON backup on first startup, mount it explicitly:
+    # volumes:
+    #   - ./data.json:/app/data.json:ro
+
+volumes:
+  postgres-data:

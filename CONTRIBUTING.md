@@ -38,4 +38,26 @@ Pull requests should:
 - Update documentation when behavior, setup, operations, or maintenance expectations change.
 - Include appropriate verification for the risk of the change.
 
+## Running Tests
+
+Install runtime and development dependencies:
+
+```bash
+python3 -m pip install -r requirements.txt -r requirements-dev.txt
+```
+
+Run the fast local suite without PostgreSQL:
+
+```bash
+pytest -m "not postgres"
+```
+
+Run the complete suite with `DATABASE_URL` pointed at PostgreSQL:
+
+```bash
+pytest
+```
+
+The test suite mocks Discord and Riot calls. Do not use real production tokens for tests.
+
 For deeper implementation guidance, use the wiki contribution page before editing code.

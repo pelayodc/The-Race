@@ -1,28 +1,22 @@
 # State and Artifacts
 
-## `data.json` and Runtime Status Fields
+## PostgreSQL Runtime State
 
-`data.json` is the primary runtime state file. Its path defaults to the repository root and can be overridden with `DATA_JSON`.
+PostgreSQL is the primary runtime state store. `DATABASE_URL` points the bot at the database. A legacy `DATA_JSON` file can be imported automatically on first startup when `AUTO_MIGRATE_JSON=true` and the database is empty.
 
-Important state groups:
+Primary tables:
 
 - `summoners`: configured leaderboard players and cached rank fields.
-- `matchData`: cached match details used for recent games and reports.
-- `highEloCache`: cached Master/Grandmaster/Challenger league data by platform.
-- `discordLinks`: normalized Discord user to summoner mapping.
-- `discordLinkRequests`: pending user link requests.
-- `matchmakingQueue`: active matchmaking players.
-- `matchmakingDraft`: active captain draft state.
-- `adminMessageId`, `leaderboardMessageId`, `matchmakingMessageId`: persistent Discord message IDs.
-- `leaderboardLastUpdateAt`, `leaderboardLastUpdateMode`, `leaderboardLastUpdateStatus`, `leaderboardLastEstimatedApiCalls`: leaderboard runtime status.
-- `leaderboardLastDailyImageAt`, `leaderboardLastDailyImageStatus`, `leaderboardLastDailyImageMessageId`, `leaderboardLastDailyImageChannelId`, `leaderboardLastDailyImageError`: daily image status.
-- `lastRiotError`: most recent Riot/API failure summary.
+- `match_data`: cached match details used for recent games and reports.
+- `match_timeline_data`: cached timelines used for gold graphs.
+- `runtime_state`: channels, message IDs, linked accounts, matchmaking, high-elo cache, SoloQ subscriptions, runtime status, and Riot errors.
+- `audit_events`: operational audit log rows.
 
-`src/state.py` initializes defaults for admin and matchmaking state. Prefer using existing helpers rather than editing state shape ad hoc.
+`src/storage.py` owns database initialization, JSON migration, state import/export, and audit persistence. `src/state.py` still initializes defaults for callers that work with the compatibility state dictionary.
 
 ## Audit Log
 
-Audit events are written by `src/utils/auditUtils.py` to a JSONL file. The admin status panel can show recent logs, filter by category, search by actor, and summarize the last 24 hours.
+Audit events are written to PostgreSQL through `src/utils/auditUtils.py` when `DATABASE_URL` is configured. Without a database, the legacy JSONL audit log fallback is still available for local development.
 
 Audit categories are defined in `src/bot_runtime.py` and include admin, matchmaking, Riot/API, leaderboard, links, and operations.
 
@@ -56,11 +50,12 @@ Source assets live under `src/Imgs/` and include:
 
 `src/ARIAL.TTF` is used by Pillow image rendering.
 
-## Files Operators Should Not Edit Manually
+## Files and Tables Operators Should Not Edit Manually
 
-Avoid manual edits to these files while the bot is running:
+Avoid manual edits while the bot is running:
 
-- `data.json`
+- PostgreSQL runtime tables
+- legacy `data.json` migration source
 - audit JSONL log
 - generated `Rank list.png`
 - generated `Daily Rank list.png`

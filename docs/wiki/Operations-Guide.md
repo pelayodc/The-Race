@@ -83,11 +83,19 @@ Users can request a link with `/link_discord`. Admins can:
 - Set the primary summoner.
 - Approve or reject pending requests.
 
-The link state is mirrored into summoner records and the `discordLinks` map inside `data.json`.
+The link state is mirrored into summoner records and the `discordLinks` map stored in PostgreSQL runtime state.
 
 ## Data Backup
 
-The **Download data backup** admin action sends a timestamped copy of `data.json` and includes the audit log when present. Use this before manual data recovery or migration work.
+The **Download data backup** admin action exports the PostgreSQL runtime state as a JSON file and includes audit events as JSONL. Use this before manual data recovery or migration work.
+
+For command-line backups, run:
+
+```bash
+python3 scripts/export_db_backup.py > data-backup.json
+```
+
+Legacy `data.json` is only used as an import source when migrating an empty database.
 
 ## Publishing the GitHub Wiki
 

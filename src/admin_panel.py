@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
@@ -12,6 +13,7 @@ from linked_accounts import LinkedAccountsAdminView, linked_accounts_admin_embed
 from matchmaking import MatchmakingAdminView, matchmaking_admin_embed
 from persistent_messages import configure_leaderboard_channel, configure_matchmaking_channel, configured_message_status, recreate_persistent_messages, refresh_configured_admin_message, refresh_configured_matchmaking_message
 from state import admin_channel_id, effective_matchmaking_separate_channels, effective_matchmaking_team_mode, effective_odd_players_policy, ensure_admin_state, ensure_matchmaking_state, forced_mode_text, leaderboard_channel_id, leaderboard_chat_commands_enabled, load_json_data, matchmaking_channel_id, missing_bot_channel_permissions, odd_players_policy_label, team_mode_label, team_mode_lock_text, voice_mode_label
+from storage import database_enabled, export_state
 from utils.auditUtils import AUDIT_LOG_PATH, interaction_actor, log_event, read_audit_events, recent_error_events
 from utils.commonUtils import jsonFile, platforms, regions
 from utils.dataUtils import riotBackoffRemaining, riotBackoffTimestamp
@@ -562,19 +564,23 @@ class StatusLogsAdminView(disnake.ui.View):
         if not await require_admin_interaction(inter):
             return
 
-        if not os.path.exists(jsonFile):
+        state_backup = export_state(jsonFile)
+        if state_backup is None:
             await send_ephemeral_response(inter, "No data file exists yet.")
             return
 
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        with open(jsonFile, "rb") as file:
-            data_file = disnake.File(BytesIO(file.read()), filename=f"data-backup-{timestamp}.json")
+        data_payload = json.dumps(state_backup, indent=2, ensure_ascii=False).encode("utf-8")
+        data_file = disnake.File(BytesIO(data_payload), filename=f"data-backup-{timestamp}.json")
 
         files = [data_file]
-        if os.path.exists(AUDIT_LOG_PATH):
+        if database_enabled():
+            audit_payload = "\n".join(json.dumps(event, ensure_ascii=False) for event in read_audit_events()).encode("utf-8")
+            files.append(disnake.File(BytesIO(audit_payload), filename=f"audit-{timestamp}.jsonl"))
+        elif os.path.exists(AUDIT_LOG_PATH):
             files.append(disnake.File(AUDIT_LOG_PATH, filename=f"audit-{timestamp}.jsonl"))
 
-        log_event("operations_data_backup_download", actor=interaction_actor(inter), status="success", summary="Data backup downloaded.", details={"includedAuditLog": os.path.exists(AUDIT_LOG_PATH)})
+        log_event("operations_data_backup_download", actor=interaction_actor(inter), status="success", summary="Data backup downloaded.", details={"includedAuditLog": len(files) > 1, "database": database_enabled()})
         await send_ephemeral_response(inter, "Data backup:", files=files)
 
     @disnake.ui.button(label="Force leaderboard refresh", style=disnake.ButtonStyle.red, custom_id="admin:status:force_leaderboard", row=1)

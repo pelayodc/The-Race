@@ -25,7 +25,7 @@ Likely causes:
 - No summoners are configured.
 - Configured summoners are unranked.
 - Riot rank data failed for one or more players.
-- `data.json` is missing expected summoner fields.
+- PostgreSQL state is missing expected summoner fields after migration or manual edits.
 
 Checks:
 
@@ -33,6 +33,25 @@ Checks:
 2. Confirm summoners have platform and region values.
 3. Check recent Riot errors in **Status / Logs**.
 4. Confirm `RIOT_API_KEY` is configured and valid.
+
+## PostgreSQL Connection or Migration Failure
+
+**Symptom**: The bot exits on startup or starts with empty state after migration.
+
+Likely causes:
+
+- `DATABASE_URL` is missing or points to the wrong host.
+- The Postgres container is not healthy.
+- Credentials in `.env` do not match `POSTGRES_USER` / `POSTGRES_PASSWORD`.
+- Legacy `DATA_JSON` was not mounted or the database already contained state, so auto-migration was skipped.
+
+Checks:
+
+1. Run `docker compose ps` and confirm `db` is healthy.
+2. Check `DATABASE_URL` in `.env`.
+3. Review startup logs for `storage_json_migration_completed` or `storage_json_migration_skipped`.
+4. Export a backup with `python3 scripts/export_db_backup.py` to confirm state is present.
+5. If you need to rerun migration, restore into a fresh empty database volume after taking a backup.
 
 ## Daily Image Is Not Generated or Not Sent
 

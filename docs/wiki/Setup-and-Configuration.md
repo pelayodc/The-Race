@@ -2,7 +2,9 @@
 
 ## Prerequisites
 
-- Python 3.10 or newer.
+- Docker and Docker Compose for the recommended setup.
+- Python 3.10 or newer for local development.
+- PostgreSQL 14 or newer for local development without Docker.
 - A Discord bot application and token.
 - A Riot API key.
 - A Discord server where the bot can be invited.
@@ -19,7 +21,9 @@ The bot loads `.env` from the repository root first and also supports legacy `sr
 | `DISCORD_CHANNEL` | Yes for posting | `0` | Fallback channel for daily rank images and patch notes. |
 | `REQUESTS` | No | `100` | Request budget used to calculate leaderboard loop interval. |
 | `DAILY` | No | `21` | Daily image posting hour in Europe/Madrid time. |
-| `DATA_JSON` | No | `data.json` at repository root | Override path for runtime state. |
+| `DATABASE_URL` | Yes | `postgresql+psycopg://therace:therace@db:5432/therace` in Docker | PostgreSQL connection string used for runtime state. |
+| `AUTO_MIGRATE_JSON` | No | `true` | Import legacy `DATA_JSON` into an empty database on startup. |
+| `DATA_JSON` | No | `data.json` or `/app/data.json` in Docker | Legacy JSON path used only as a migration source or export fallback. |
 
 ## Discord Permissions and Channels
 
@@ -42,7 +46,28 @@ Recommended channel setup:
 - **Matchmaking channel**: configured with `/admin_set_matchmaking_channel` or the admin settings panel.
 - **Daily/patch channel**: configured by `DISCORD_CHANNEL`.
 
-## Dependency Installation
+## Docker Setup
+
+Copy the environment template and fill in Discord/Riot credentials:
+
+```bash
+cp .env.example .env
+```
+
+Start the database and bot:
+
+```bash
+docker compose up --build
+```
+
+`docker-compose.yml` runs two services:
+
+- `db`: PostgreSQL with the `postgres-data` volume.
+- `bot`: Python bot container connected through `DATABASE_URL`.
+
+To import a legacy JSON backup during the first Docker startup, mount it explicitly as `/app/data.json` before starting with an empty database.
+
+## Local Dependency Installation
 
 Install Python dependencies from the repository root:
 
@@ -50,17 +75,17 @@ Install Python dependencies from the repository root:
 python3 -m pip install -r requirements.txt
 ```
 
-Current runtime dependencies include `disnake`, `requests`, `Pillow`, `python-dotenv`, `beautifulsoup4`, `numpy`, and `pytz`.
+Current runtime dependencies include `disnake`, `requests`, `Pillow`, `python-dotenv`, `beautifulsoup4`, `numpy`, `pytz`, `SQLAlchemy`, and `psycopg`.
 
-## Startup Command
+## Local Startup Command
 
-Run the bot from the repository root:
+Run the bot from the repository root after configuring `DATABASE_URL`:
 
 ```bash
 python3 src/main.py
 ```
 
-`src/main.py` registers events and commands, checks `DISCORD_TOKEN`, and starts the `InteractionBot`.
+`src/main.py` initializes PostgreSQL storage, runs legacy JSON migration when needed, registers events and commands, checks `DISCORD_TOKEN`, and starts the `InteractionBot`.
 
 ## First-Run Validation
 
@@ -74,7 +99,8 @@ python3 src/main.py
 
 ## Notes for Operators
 
-- Do not edit `data.json` while the bot is running unless you have stopped the bot and have a backup.
+- PostgreSQL is the runtime source of truth. Do not edit database rows manually while the bot is running unless you have stopped the bot and have a backup.
+- If migrating from legacy JSON, keep `DATA_JSON` available for the first startup with an empty database.
 - Do not treat generated PNG files as source data.
 - If Riot backoff is active, wait for it to expire instead of retrying repeatedly.
 - To publish documentation to GitHub Wiki, enable the repository wiki and use `scripts/publish_wiki.sh` or the `Publish GitHub Wiki` workflow.

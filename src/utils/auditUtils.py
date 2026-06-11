@@ -34,6 +34,14 @@ def log_event(event, actor=None, status="info", summary="", details=None):
         "details": details
     }
 
+    from storage import database_enabled, log_audit_event
+    if database_enabled():
+        try:
+            log_audit_event(entry)
+            return
+        except RuntimeError as error:
+            print(f"Failed to write audit event to database: {error}")
+
     try:
         os.makedirs(os.path.dirname(AUDIT_LOG_PATH), exist_ok=True)
         with open(AUDIT_LOG_PATH, "a", encoding="utf-8") as file:
@@ -44,6 +52,14 @@ def log_event(event, actor=None, status="info", summary="", details=None):
 
 
 def read_audit_events(limit=None, status=None, event_contains=None):
+    from storage import database_enabled, read_audit_events_from_db
+    if database_enabled():
+        try:
+            return read_audit_events_from_db(limit, status, event_contains)
+        except RuntimeError as error:
+            print(f"Failed to read audit events from database: {error}")
+            return []
+
     if not os.path.exists(AUDIT_LOG_PATH):
         return []
 

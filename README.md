@@ -12,7 +12,8 @@ The Race is a League of Legends Discord bot for running a Solo/Duo leaderboard a
 - Patch note checks and manual patch lookup.
 - Discord account linking for personal `/me` reports.
 - Matchmaking queue with random, balanced-rank, and captain modes.
-- Admin panel for configuration, status, logs, backups, force refreshes, and persistent messages.
+- Admin panel for configuration, status, logs, database backups, force refreshes, and persistent messages.
+- PostgreSQL persistence with Docker Compose deployment.
 - Multi-language Discord UI strings through `src/locales/`.
 
 ## Documentation
@@ -35,35 +36,45 @@ The GitHub Wiki can be published manually with `scripts/publish_wiki.sh` or auto
 ### Prerequisites
 
 - Python 3.10+
+- PostgreSQL 14+ if running without Docker
 - Discord bot token
 - Riot API key
 - A Discord server where the bot can send messages and embeds
 
 ### Setup
 
-1. Install dependencies:
+1. Copy the environment template:
 
    ```bash
-   python3 -m pip install -r requirements.txt
+   cp .env.example .env
    ```
 
-2. Create a `.env` file in the repository root:
+2. Fill in at least:
 
    ```env
    DISCORD_TOKEN=your-discord-token
    RIOT_API_KEY=your-riot-api-key
    DISCORD_CHANNEL=123456789012345678
-   REQUESTS=100
-   DAILY=21
    ```
 
-3. Start the bot:
+3. Start the bot and database:
 
    ```bash
-   python3 src/main.py
+   docker compose up --build
    ```
 
 4. In Discord, use `/admin_setup` to create the administration message, then configure the leaderboard and matchmaking channels from the admin panel.
+
+### Local Python Setup
+
+For development without Docker, install dependencies and point `DATABASE_URL` at a PostgreSQL database:
+
+   ```bash
+   python3 -m pip install -r requirements.txt
+   python3 src/main.py
+   ```
+
+If a legacy `data.json` exists and the PostgreSQL database is empty, the bot imports it automatically on startup when `AUTO_MIGRATE_JSON=true`.
 
 For full setup details, permissions, channel configuration, and first-run checks, see [Setup and Configuration](docs/wiki/Setup-and-Configuration.md).
 
@@ -90,13 +101,24 @@ Patch note example:
 - `src/`: bot runtime, Discord commands/events, admin panel, leaderboard, matchmaking, linked accounts, personal reports, state, localization, and utilities.
 - `src/Imgs/`: rank icons, champion icons, and generated/downloaded visual assets used by image rendering.
 - `docs/wiki/`: GitHub Wiki-ready documentation.
-- `data.json`: local runtime state; do not commit real production data.
+- `Dockerfile` and `docker-compose.yml`: containerized bot and PostgreSQL runtime.
 
 See [Code Map](docs/wiki/Code-Map.md) and [State and Artifacts](docs/wiki/State-and-Artifacts.md) for details.
 
 ## Contributing
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) and [Contributing to The Race](docs/wiki/Contributing-to-The-Race.md) before changing code. Changes should preserve Discord UX, Riot API discipline, state safety, localization, and focused verification.
+
+## Testing
+
+Install development dependencies and run the fast local suite:
+
+```bash
+python3 -m pip install -r requirements.txt -r requirements-dev.txt
+pytest -m "not postgres"
+```
+
+To run the complete suite, configure `DATABASE_URL` for a PostgreSQL database and run `pytest`. Tests mock Discord/Riot interactions and do not require real tokens.
 
 ## License
 
