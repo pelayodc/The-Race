@@ -129,7 +129,7 @@ def register_events(bot):
             await refresh_configured_admin_message(json_data)
             return
 
-        lastRunTime = json_data['runtime']
+        lastRunTime = json_data.get("runtime", 0)
         # Set the timezone to Europe/London
         timezone = pytz.timezone('Europe/Madrid')
         currentTime = datetime.now(tz=timezone)

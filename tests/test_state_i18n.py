@@ -6,6 +6,10 @@ def test_ensure_admin_state_sets_defaults(no_database):
     state = ensure_admin_state({})
 
     assert state["botLanguage"] == DEFAULT_LANGUAGE
+    assert state["summoners"] == {}
+    assert state["matchData"] == {}
+    assert state["matchTimelineData"] == {}
+    assert state["runtime"] == 0
     assert state["discordLinks"] == {}
     assert state["leaderboardChatCommandsEnabled"] is False
     assert state["soloQueueStatus"] == {}

@@ -91,7 +91,7 @@ def initialize_storage(json_file_path=None):
 
 
 def _database_has_state(connection, tables):
-    for table_name in ["summoners", "match_data", "match_timeline_data", "runtime_state"]:
+    for table_name in ["summoners", "match_data", "match_timeline_data"]:
         table = tables[table_name]
         if connection.execute(table.select().limit(1)).first() is not None:
             return True
@@ -99,7 +99,10 @@ def _database_has_state(connection, tables):
 
 
 def migrate_json_if_needed(json_file_path=None):
-    if not database_enabled() or not auto_migrate_json() or not json_file_path or not os.path.exists(json_file_path):
+    if not database_enabled() or not auto_migrate_json() or not json_file_path:
+        return False
+    if not os.path.exists(json_file_path):
+        print(f"Skipping JSON migration because legacy state file was not found at {json_file_path}.")
         return False
 
     engine, metadata, tables = _ensure_engine()

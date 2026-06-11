@@ -45,6 +45,23 @@ def test_storage_migrates_legacy_json_only_when_database_is_empty(postgres_stora
 
 
 @pytest.mark.postgres
+def test_storage_migration_ignores_runtime_state_when_primary_tables_are_empty(postgres_storage, tmp_path, monkeypatch):
+    postgres_storage.save_state({"runtime": 0, "leaderboardChatCommandsEnabled": False})
+    legacy_path = tmp_path / "legacy.json"
+    legacy_path.write_text(
+        json.dumps({"summoners": {"Legacy#EUW": {"tier": "GOLD"}}, "runtime": 123}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("AUTO_MIGRATE_JSON", "true")
+
+    assert postgres_storage.migrate_json_if_needed(str(legacy_path)) is True
+    state = postgres_storage.load_state()
+    assert state["summoners"] == {"Legacy#EUW": {"tier": "GOLD"}}
+    assert state["runtime"] == 123
+
+
+@pytest.mark.postgres
 def test_storage_audit_events_filter_and_limit(postgres_storage):
     postgres_storage.log_audit_event({
         "event": "leaderboard_update",

@@ -73,6 +73,10 @@ def ensure_admin_state(json_data):
     ensure_matchmaking_state(json_data)
     if not supported_language(json_data.get("botLanguage")):
         json_data["botLanguage"] = DEFAULT_LANGUAGE
+    json_data.setdefault("summoners", {})
+    json_data.setdefault("matchData", {})
+    json_data.setdefault("matchTimelineData", {})
+    json_data.setdefault("runtime", 0)
     json_data.setdefault("discordLinks", {})
     json_data.setdefault("discordLinkRequests", [])
     json_data.setdefault("leaderboardChatCommandsEnabled", False)
