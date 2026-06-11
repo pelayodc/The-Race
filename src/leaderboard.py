@@ -9,7 +9,7 @@ import requests
 from discord_helpers import get_discord_channel, get_guild_member, send_ephemeral_response
 from i18n import t
 from linked_accounts import find_summoner_key, normalize_tagline, rebuild_discord_links_from_summoners
-from solo_queue import add_solo_queue_icon, is_secondary_summoner_data, is_summoner_in_solo_queue, refresh_target_display_names, subscription_targets, toggle_subscription
+from solo_queue import add_solo_queue_icon, is_secondary_summoner_data, is_subscribed, is_summoner_in_solo_queue, refresh_target_display_names, subscription_targets, toggle_subscription
 from state import ensure_admin_state, leaderboard_channel_id, load_json_data, utc_now_iso
 from utils.auditUtils import log_event
 from utils.commonUtils import discordChannel, jsonFile, outputPath, riotApKey

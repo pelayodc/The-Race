@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from leaderboard import leaderboard_embed, recent_results_text
+from leaderboard import SoloQueueSubscriptionView, leaderboard_embed, recent_results_text
 
 
 class FakeGuild:
@@ -75,3 +75,22 @@ def test_recent_results_text_marks_active_game(make_summoner, no_database):
     summoner.game3Remake = True
 
     assert recent_results_text(summoner, in_solo_queue=True) == "✅❌➖▫️🎮"
+
+
+@pytest.mark.asyncio
+async def test_subscription_view_builds_with_existing_subscription(make_summoner, no_database):
+    json_data = {
+        "botLanguage": "en",
+        "soloQueueSubscriptions": {"99": ["10"]},
+    }
+    target = {
+        "playerId": "10",
+        "displayName": "Player",
+        "summonerFullName": "Player#EUW",
+        "summoner": make_summoner("Player#EUW", player_id="10"),
+    }
+
+    view = SoloQueueSubscriptionView(json_data, "99", [target])
+
+    assert len(view.children) == 1
+    assert view.children[0].options[0].label.startswith("✓ ")
