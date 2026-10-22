@@ -10,7 +10,7 @@ from challenge_store import read_challenges, edit_challenges
 from i18n import t
 from menu_session import MenuSession, SessionView, MenuButton, MenuSelect, page_slice, add_pager
 from soloq_challenge import (
-    RuleError, TASKS, new_edition, phase, timestamp, register, points, pending,
+    DAY, WEEK, RuleError, TASKS, new_edition, phase, timestamp, register, points, pending,
     streaks, launch, assign, resolve_shell, moderate_player, audit,
 )
 from state import can_configure_channels, load_json_data
@@ -44,6 +44,17 @@ def registration_text(edition, guild):
 
 
 def leaderboard_text(edition, guild):
+    now = timestamp()
+    stage = phase(edition, now)
+    heading = tr(edition, stage)
+    if stage in ("week1", "week2"):
+        end = edition["starts_at"] + WEEK if stage == "week1" else edition["ends_at"]
+        seconds = max(0, end - now)
+        if seconds < 3600:
+            remaining = tr(edition, "week_remaining_under_hour")
+        else:
+            remaining = tr(edition, "week_remaining", days=int(seconds // DAY), hours=int(seconds % DAY // 3600))
+        heading += "\n" + remaining
     rows = []
     ranked = sorted(((uid, p) for uid, p in edition["players"].items() if p.get("approved", True)), key=lambda pair: (-points(pair[1]), pair[0]))
     for rank, (uid, player) in enumerate(ranked, 1):
@@ -52,7 +63,7 @@ def leaderboard_text(edition, guild):
         unrevealed = sum(s["state"] == "unrevealed" for s in tasks)
         counts = [sum(r["week"] == w for r in player["records"]) for w in (0, 1)]
         rows.append(f"**#{rank} {display(guild, uid)} · {points(player)} pts**\n{counts[0]}/15 + {counts[1]}/15 · {len(player['records'])}/30 · {tr(edition, 'streak')}: {streaks(player)[0]:+d}\n{tr(edition, 'inventory')}: {inventory} · {tr(edition, 'unrevealed')}: {unrevealed} · {tr(edition, 'pending')}: {len(tasks) - unrevealed}")
-    return tr(edition, phase(edition, timestamp())) + "\n\n" + ("\n\n".join(rows) or tr(edition, "empty"))
+    return heading + "\n\n" + ("\n\n".join(rows) or tr(edition, "empty"))
 
 
 def shell_description(edition, shell, guild):

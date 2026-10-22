@@ -12,6 +12,8 @@
     "history": "Match history",
     "week1": "Week 1 · 15 games",
     "week2": "Week 2 · 15 games",
+    "week_remaining": "{days} days and {hours} hours remaining this week",
+    "week_remaining_under_hour": "Less than one hour remaining this week",
     "settling": "Competition ended · reconciling results",
     "finished": "Final results",
     "cancelled": "Cancelled",

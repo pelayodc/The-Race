@@ -12,6 +12,8 @@
     "history": "Registro de partidas",
     "week1": "Semana 1 · 15 partidas",
     "week2": "Semana 2 · 15 partidas",
+    "week_remaining": "{days} días y {hours} horas restantes de la semana",
+    "week_remaining_under_hour": "Menos de una hora restante de la semana",
     "settling": "Competición cerrada · conciliando resultados",
     "finished": "Resultados finales",
     "cancelled": "Cancelada",

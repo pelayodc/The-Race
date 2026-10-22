@@ -48,6 +48,27 @@ def inter():
     return SimpleNamespace(guild=guild, author=user, response=Response(), followup=SimpleNamespace(send=AsyncMock(return_value=message)))
 
 
+@pytest.mark.parametrize("offset,week,remaining", [
+    (WEEK - 5 * DAY - 4 * 3600, 1, "5 días y 4 horas"),
+    (WEEK, 2, "7 días y 0 horas"),
+    (2 * WEEK - 3600, 2, "0 días y 1 horas"),
+    (2 * WEEK - 1, 2, "Menos de una hora"),
+])
+def test_ranking_week_countdown(offset, week, remaining, monkeypatch, inter):
+    edition = new_edition(0, "es")
+    monkeypatch.setattr(ui, "timestamp", lambda: edition["starts_at"] + offset)
+    header = ui.leaderboard_text(edition, inter.guild).split("\n\n")[0]
+    assert f"Semana {week}" in header
+    assert remaining in header
+
+
+@pytest.mark.parametrize("offset", [-1, 2 * WEEK, 2 * WEEK + DAY])
+def test_ranking_has_no_week_countdown_outside_competition(offset, monkeypatch, inter):
+    edition = new_edition(0, "es")
+    monkeypatch.setattr(ui, "timestamp", lambda: edition["starts_at"] + offset)
+    assert "restantes de la semana" not in ui.leaderboard_text(edition, inter.guild)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("section", ["overview", "registration", "ranking", "shells", "incoming", "completed", "all_shells", "history", "history_detail", "admin"])
 async def test_challenge_menus_fit_discord_and_keep_owner(section, memory, inter):

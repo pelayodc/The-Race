@@ -12,6 +12,8 @@
     "history": "Storico partite",
     "week1": "Settimana 1 · 15 partite",
     "week2": "Settimana 2 · 15 partite",
+    "week_remaining": "{days} giorni e {hours} ore rimanenti questa settimana",
+    "week_remaining_under_hour": "Meno di un’ora rimanente questa settimana",
     "settling": "Competizione chiusa · verifica risultati",
     "finished": "Risultati finali",
     "cancelled": "Annullata",
