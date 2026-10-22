@@ -11,6 +11,7 @@
 /.env
 /src/.env
 /src/data.json
+/src/logs/
 /src/Daily Rank list.png
 /src/Rank list.png
 /Daily Rank list.png
