@@ -29,6 +29,9 @@ def register_events(bot):
             bot.add_view(MatchmakingView())
             bot.add_view(AdminView())
             bot.add_view(LeaderboardView())
+            from challenge_ui import ChallengePublicView
+            for kind in ("registration", "ranking", "shells", "admin"):
+                bot.add_view(ChallengePublicView(kind))
             bot_runtime.matchmaking_view_registered = True
         await setup_matchmaking_message()
         json_data = load_json_data()
@@ -41,6 +44,8 @@ def register_events(bot):
             updatePatchNotes.start()
         if not captainDraftTimeout.is_running():
             captainDraftTimeout.start()
+        if not soloQChallenge.is_running():
+            soloQChallenge.start()
 
     @bot.event
     async def on_voice_state_update(member, before, after):
@@ -109,6 +114,14 @@ def register_events(bot):
             await process_captain_draft_timeout()
         except Exception as error:
             log_event("matchmaking_captain_timeout_error", actor=system_actor(), status="error", summary=f"Captain draft timeout failed: {error}")
+
+    @tasks.loop(seconds=120)
+    async def soloQChallenge():
+        from challenge_service import challenge_tick
+        try:
+            await challenge_tick(bot)
+        except Exception as error:
+            log_event("soloq_challenge_error", actor=system_actor(), status="error", summary=str(error))
 
     @tasks.loop(seconds=60)
     async def updateRaceImage():
@@ -181,3 +194,4 @@ def register_events(bot):
     TASKS["updateRaceImage"] = updateRaceImage
     TASKS["updatePatchNotes"] = updatePatchNotes
     TASKS["captainDraftTimeout"] = captainDraftTimeout
+    TASKS["soloQChallenge"] = soloQChallenge

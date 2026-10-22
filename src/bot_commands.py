@@ -16,6 +16,11 @@ from utils.jsonUtils import openJsonFile, writeToJsonFile
 
 
 def register_commands(bot):
+    @bot.slash_command(name="soloq_challenge", description="Open SoloQ Challenge registration, standings and Blue Shells")
+    async def soloqchallenge(inter: ApplicationCommandInteraction):
+        from challenge_ui import open_challenge
+        await open_challenge(inter)
+
     @bot.slash_command(description="Full list of summoners")
     async def list(inter: ApplicationCommandInteraction):
         await inter.response.defer()

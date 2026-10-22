@@ -47,6 +47,8 @@ Maintenance notes:
 
 ## Matchmaking
 
+- `src/soloq_challenge.py`, `src/challenge_store.py`, `src/challenge_service.py`, and `src/challenge_ui.py`: challenge rules, independent transactional persistence, Riot collection/channel lifecycle, and Discord menus. See [[SoloQ Challenge|SoloQ-Challenge]].
+
 - `src/matchmaking.py`: queue state, team balancing, captain draft, role preferences, voice channel movement, matchmaking embeds, public and admin views, and draft timeout processing.
 - `src/state.py`: matchmaking defaults and effective settings.
 

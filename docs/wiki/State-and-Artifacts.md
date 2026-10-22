@@ -11,6 +11,7 @@ Primary tables:
 - `match_timeline_data`: cached timelines used for gold graphs.
 - `runtime_state`: channels, message IDs, linked accounts, matchmaking, high-elo cache, SoloQ subscriptions, runtime status, and Riot errors.
 - `audit_events`: operational audit log rows.
+- `solo_challenges`: per-server challenge editions, counted matches, Blue Shells, moderation and Discord delivery state, updated independently with row locks.
 
 `src/storage.py` owns database initialization, JSON migration, state import/export, and audit persistence. `src/state.py` still initializes defaults for callers that work with the compatibility state dictionary.
 

@@ -16,6 +16,12 @@ The Race is a League of Legends Discord bot for running a Solo/Duo leaderboard a
 - Matchmaking queue with random, balanced-rank, and captain modes.
 - Admin panel for configuration, status, logs, database backups, force refreshes, and persistent messages.
 - PostgreSQL persistence with Docker Compose deployment.
+- Two-week SoloQ Challenges with 72-hour registration, 15 games per week, custom points, Blue Shell challenges, and moderation through `/soloq_challenge`. See [challenge rules and setup](docs/wiki/SoloQ-Challenge.md).
+
+To simulate a complete challenge without Discord, Riot or database access, run
+`python3 scripts/simulate_challenge.py` and open `simulation-report/index.html`.
+The report includes checks, standings and match histories. CI publishes the same
+report as the `soloq-challenge-simulation` artifact.
 - Multi-language Discord UI strings through `src/locales/`.
 
 ## Documentation

@@ -5,10 +5,12 @@ on:
     branches:
       - main
       - master
+      - develop
   pull_request:
     branches:
       - main
       - master
+      - develop
   workflow_dispatch:
 
 permissions:
@@ -71,6 +73,17 @@ jobs:
 
       - name: Run tests
         run: pytest --cov=src --cov-report=term-missing --cov-report=xml
+
+      - name: Simulate SoloQ Challenge offline
+        run: python scripts/simulate_challenge.py
+
+      - name: Upload simulation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soloq-challenge-simulation
+          path: simulation-report/
+          if-no-files-found: ignore
 
       - name: Generate coverage badge
         run: genbadge coverage --local -i coverage.xml -o img/coverage.svg

@@ -3,7 +3,7 @@ import os
 from datetime import datetime, timezone
 
 
-RUNTIME_EXCLUDED_KEYS = {"summoners", "matchData", "matchTimelineData"}
+RUNTIME_EXCLUDED_KEYS = {"summoners", "matchData", "matchTimelineData", "soloChallenges"}
 
 _engine = None
 _engine_url = None
@@ -44,6 +44,11 @@ def _ensure_engine():
     _engine_url = current_url
     _metadata = sa.MetaData()
     _tables = {
+        "solo_challenges": sa.Table(
+            "solo_challenges", _metadata,
+            sa.Column("guild_id", sa.Text, primary_key=True),
+            sa.Column("data", JSONB, nullable=False),
+        ),
         "summoners": sa.Table(
             "summoners", _metadata,
             sa.Column("full_name", sa.Text, primary_key=True),
@@ -91,7 +96,7 @@ def initialize_storage(json_file_path=None):
 
 
 def _database_has_state(connection, tables):
-    for table_name in ["summoners", "match_data", "match_timeline_data"]:
+    for table_name in ["summoners", "match_data", "match_timeline_data", "solo_challenges"]:
         table = tables[table_name]
         if connection.execute(table.select().limit(1)).first() is not None:
             return True
@@ -195,11 +200,23 @@ def save_state(state):
         ]
         if runtime_rows:
             connection.execute(tables["runtime_state"].insert(), runtime_rows)
+        if state.get("soloChallenges"):
+            from sqlalchemy.dialects.postgresql import insert
+            table = tables["solo_challenges"]
+            for guild_id, document in state["soloChallenges"].items():
+                statement = insert(table).values(guild_id=str(guild_id), data=document)
+                connection.execute(statement.on_conflict_do_update(index_elements=[table.c.guild_id], set_={"data": statement.excluded.data}))
 
 
 def export_state(json_file_path=None):
     if database_enabled():
-        return load_state(json_file_path)
+        state = load_state(json_file_path)
+        engine, _, tables = _ensure_engine()
+        with engine.connect() as connection:
+            challenges = {row.guild_id: row.data for row in connection.execute(tables["solo_challenges"].select())}
+        if challenges:
+            state["soloChallenges"] = challenges
+        return state
     if not json_file_path or not os.path.exists(json_file_path):
         return None
     with open(json_file_path, "r", encoding="utf-8") as file:
