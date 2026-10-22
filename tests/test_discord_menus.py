@@ -69,6 +69,13 @@ async def test_admin_sections_fit_discord_limits(section, menu_data, interaction
     menu.section, menu.member_id = section, "1"
     await menu.render(interaction)
     view = menu.session.view
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert embed.description
+    assert "menus." not in embed.description
+    assert "menus." not in embed.author.name
+    navigation = view.children[0]
+    assert navigation.placeholder == "Cambiar de pestaña"
+    assert all(entry.label.startswith("Pestaña: ") and entry.description for entry in navigation.options)
     widths = {}
     for child in view.children:
         widths[child.row] = widths.get(child.row, 0) + child.width

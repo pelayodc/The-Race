@@ -76,13 +76,35 @@ class Menu:
         view.add_item(MenuButton(text(data, key), callback, **kwargs))
 
     def navigation(self, view, data, sections):
-        view.add_item(MenuSelect(text(data, "section"), [
-            option(text(data, name), name, default=name == self.section)
+        current = self.section.split(":")[0]
+        if current == "my_role":
+            current = "roles"
+        view.add_item(MenuSelect(text(data, "change_tab"), [
+            option(text(data, "tab_label", name=text(data, name)), name,
+                   description=text(data, f"tab_info.{name}")[:100], default=name == current)
             for name in sections
         ], self.go, row=0))
 
+    def describe(self, embed, data, context):
+        section = self.section.replace(":", "_")
+        info = text(data, f"page_info.{section}")
+        if info.startswith("menus."):
+            info = text(data, f"tab_info.{self.section.split(':')[0]}")
+        if not embed.description:
+            embed.description = info
+        elif self.section not in ("home", "settings", "matchmaking"):
+            embed.description = f"{info}\n\n{embed.description}"
+        path = [context] + self.section.split(":") if context != self.section else [context]
+        labels = {"add": "link" if self.section.startswith("links:") else "add", "primary": "set_primary", "member_role": "set_role"}
+        embed.set_author(name=" / ".join(text(data, labels.get(part, part)) for part in path))
+        embed.set_footer(text=text(data, "session_info"))
+
     def listing(self, view, embed, data, entries):
+        total = len(entries)
         entries, self.page, pages = page_slice(entries, self.page)
+        embed.add_field(name=text(data, "entries"), value=str(total), inline=True)
+        if pages > 1:
+            embed.add_field(name=text(data, "page"), value=f"{self.page + 1} / {pages}", inline=True)
         valid = {str(entry.value) for entry in entries}
         if self.selected not in valid:
             self.selected = None
@@ -125,6 +147,12 @@ class AdminMenu(Menu):
             self.listing(view, embed, data, [option(name, name) for name in sorted(data["summoners"])])
             self.button(view, data, "add", lambda i: self.go(i, "players:add"))
             if self.selected:
+                record = data["summoners"][self.selected]
+                rank = " ".join(str(record.get(key) or "-") for key in ("tier", "rank"))
+                value = f"{rank} · {record.get('leaguePoints', 0)} LP"
+                if record.get("discordUserId"):
+                    value += f"\n<@{record['discordUserId']}> · {text(data, 'primary' if record.get('discordPrimary') else 'secondary')}"
+                embed.add_field(name=self.selected, value=value, inline=False)
                 self.button(view, data, "remove", lambda i: self.ask(i, "remove"), style=disnake.ButtonStyle.danger)
         elif self.section == "players:add":
             view.add_item(MenuSelect(text(data, "platform"), [option(p, p) for p in platforms], self.add_summoner))
@@ -132,6 +160,12 @@ class AdminMenu(Menu):
             view.add_item(MemberSelect(self, data))
             if self.member_id:
                 embed.description = f"<@{self.member_id}>"
+                accounts = [
+                    f"{name} · {text(data, 'primary' if record.get('discordPrimary') else 'secondary')}"
+                    for name, record in data["summoners"].items()
+                    if str(record.get("discordUserId")) == self.member_id
+                ]
+                embed.add_field(name=text(data, "links"), value="\n".join(accounts)[:1024] or text(data, "empty"), inline=False)
                 self.button(view, data, "link", lambda i: self.go(i, "links:add"))
                 self.button(view, data, "set_primary", lambda i: self.go(i, "links:primary"))
                 self.button(view, data, "unlink", lambda i: self.go(i, "links:unlink"), style=disnake.ButtonStyle.danger)
@@ -197,6 +231,10 @@ class AdminMenu(Menu):
             from bot_runtime import AUDIT_CATEGORY_LABELS
             events = filter_audit_events(category=self.category, actor_query=self.actor_query)
             embed.description = "\n".join(format_log_event(event) for event in events)[-4000:] or text(data, "empty")
+            if self.category:
+                embed.add_field(name=text(data, "categories"), value=text(data, self.category), inline=True)
+            if self.actor_query:
+                embed.add_field(name=text(data, "actor"), value=self.actor_query, inline=True)
             view.add_item(MenuSelect(text(data, "logs"), [option(text(data, "all"), "all", default=self.category is None)] + [option(text(data, category), category, default=self.category == category) for category in AUDIT_CATEGORY_LABELS], self.filter_logs))
             self.button(view, data, "search", self.search_actor)
             self.add_operations(view, data, ("summary",))
@@ -219,6 +257,8 @@ class AdminMenu(Menu):
                 self.button(view, data, "back", lambda i: self.go(i, parent))
         if detail:
             embed = detail
+        if not self.confirmation and not detail:
+            self.describe(embed, data, "home")
         await self.session.show(inter, embed, view, notice)
 
     async def ask(self, inter, action):
@@ -558,6 +598,9 @@ class SubscriptionMenu(Menu):
             self.button(view, data, "unsubscribe" if subscribed else "subscribe", apply, style=disnake.ButtonStyle.danger if subscribed else disnake.ButtonStyle.primary)
         if self.selected:
             self.button(view, data, "back", lambda i: self.go(i, self.section))
+        if self.section == "available":
+            embed.add_field(name=text(data, "mine"), value=str(len(data["soloQueueSubscriptions"].get(str(self.session.owner_id), []))), inline=True)
+        self.describe(embed, data, "subscriptions")
         await self.session.show(inter, embed, view, notice)
 
     async def change(self, inter, target, expected_subscribed):
@@ -611,6 +654,8 @@ class MatchmakingMenu(Menu):
             embed.add_field(name=text(data, "locked"), value=text(data, self.section), inline=False)
         if self.section != "teams":
             self.button(view, data, "back", lambda i: self.go(i, "teams"))
+        if not detail:
+            self.describe(embed, data, "matchmaking")
         await self.session.show(inter, detail or embed, view, notice)
 
 
