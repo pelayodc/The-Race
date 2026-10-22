@@ -644,46 +644,28 @@ class AdminView(disnake.ui.View):
 
     @disnake.ui.button(label="App settings", style=disnake.ButtonStyle.blurple, custom_id="admin:settings")
     async def settings(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
-        if not await require_admin_interaction(inter):
-            return
-
-        json_data = ensure_admin_state(load_json_data())
-        await send_ephemeral_response(inter, embed=settings_admin_embed(json_data), view=SettingsAdminView(json_data))
+        from discord_menus import open_admin_menu
+        await open_admin_menu(inter, "settings")
 
     @disnake.ui.button(label="Leaderboard users", style=disnake.ButtonStyle.green, custom_id="admin:leaderboard")
     async def leaderboard_users(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
-        if not await require_admin_interaction(inter):
-            return
-
-        json_data = load_json_data()
-        await send_ephemeral_response(inter, embed=leaderboard_users_admin_embed(json_data), view=LeaderboardUsersAdminView(json_data))
+        from discord_menus import open_admin_menu
+        await open_admin_menu(inter, "players")
 
     @disnake.ui.button(label="Linked accounts", style=disnake.ButtonStyle.green, custom_id="admin:links", row=1)
     async def linked_accounts(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
-        if not await require_admin_interaction(inter):
-            return
-
-        json_data = ensure_admin_state(load_json_data())
-        rebuild_discord_links_from_summoners(json_data)
-        writeToJsonFile(jsonFile, json_data)
-        await send_ephemeral_response(inter, embed=linked_accounts_admin_embed(json_data), view=LinkedAccountsAdminView(json_data))
+        from discord_menus import open_admin_menu
+        await open_admin_menu(inter, "links")
 
     @disnake.ui.button(label="Matchmaking", style=disnake.ButtonStyle.gray, custom_id="admin:matchmaking")
     async def matchmaking(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
-        if not await require_admin_interaction(inter):
-            return
-
-        json_data = ensure_matchmaking_state(load_json_data())
-        await send_ephemeral_response(inter, embed=matchmaking_admin_embed(json_data), view=MatchmakingAdminView(json_data))
+        from discord_menus import open_admin_menu
+        await open_admin_menu(inter, "matchmaking")
 
     @disnake.ui.button(label="Status / Logs", style=disnake.ButtonStyle.blurple, custom_id="admin:status")
     async def status_logs(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
-        if not await require_admin_interaction(inter):
-            return
-
-        await inter.response.defer(ephemeral=True)
-        json_data = ensure_admin_state(load_json_data())
-        await send_ephemeral_followup(inter, embed=status_admin_embed(json_data), view=StatusLogsAdminView())
+        from discord_menus import open_admin_menu
+        await open_admin_menu(inter, "status")
 
     @disnake.ui.button(label="Refresh", style=disnake.ButtonStyle.gray, custom_id="admin:refresh")
     async def refresh_admin_panel(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):

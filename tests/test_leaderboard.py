@@ -64,8 +64,7 @@ async def test_public_leaderboard_hides_secondaries_renumbers_and_links(make_sum
     assert "**#3**" not in summoners_field
     assert "https://dpm.lol/Primary-EUW" in summoners_field
     assert "🎮" in summoners_field
-    assert "✅" in recent_field
-    assert "🎮" in recent_field
+    assert recent_field.splitlines()[0].startswith("🎮")
 
 
 def test_recent_results_text_marks_active_game(make_summoner, no_database):
@@ -74,7 +73,7 @@ def test_recent_results_text_marks_active_game(make_summoner, no_database):
     summoner.game2Win = False
     summoner.game3Remake = True
 
-    assert recent_results_text(summoner, in_solo_queue=True) == "✅❌➖▫️🎮"
+    assert recent_results_text(summoner, in_solo_queue=True) == "🎮❌➖▫️▫️"
 
 
 @pytest.mark.asyncio

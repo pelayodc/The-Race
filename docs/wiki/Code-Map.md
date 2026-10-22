@@ -14,6 +14,8 @@ Maintenance notes:
 - `src/bot_commands.py`: slash commands for list, personal reports, patch notes, admin setup, channel configuration, linked accounts, and public add/remove.
 - `src/bot_events.py`: `on_ready`, voice state updates, scheduled leaderboard loop, scheduled patch loop, and captain draft timeout loop.
 - `src/discord_helpers.py`: channel/message fetch helpers, ephemeral responses, temporary messages, permission checks, and admin interaction guard.
+- `src/menu_session.py`: private session ownership, fixed expiration, component helpers, and pagination.
+- `src/discord_menus.py`: private navigation for administration, account links, requests, subscriptions, and grouped matchmaking settings. Imports business modules lazily to avoid circular imports.
 
 Maintenance notes:
 

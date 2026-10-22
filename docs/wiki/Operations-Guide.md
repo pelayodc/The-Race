@@ -25,13 +25,16 @@ The persistent admin message is created with `/admin_setup` and rendered by `src
 
 Main admin areas:
 
-- **App settings**: channels, language, and `/add /remove` toggle.
-- **Leaderboard users**: add or remove summoners.
-- **Linked accounts**: link, unlink, set primary, approve, or reject requests.
+- **App settings**: channels, language, and explicit enable/disable actions for `/add /remove`.
+- **Leaderboard users**: select a platform before entering a Riot ID; the routing region is automatic. Removing a summoner requires confirmation.
+- **Linked accounts**: select a Discord member, then an existing summoner to link, unlink, or set as primary. The first linked account becomes primary; additional links remain secondary until explicitly changed. Unlinking requires confirmation.
+- **Link requests**: select a request to inspect its user and summoner, then approve or reject it.
 - **Matchmaking**: configure modes, role behavior, locks, and force start.
-- **Status / Logs**: health check, permission test, persistent message recreation, data backup, force refreshes, recent logs, and audit summaries.
+- **Status**: background task status, Riot backoff, health checks, and permissions.
+- **Logs**: category filters, actor search, and the last 24 hours summary.
+- **Maintenance**: persistent message recreation, backup download, leaderboard refresh, and daily image generation.
 
-Most operational feedback is ephemeral and automatically cleaned up after the configured ephemeral timeout.
+The public admin buttons open a private session owned by the requesting administrator. Use the section selector and Back button to navigate in the same message. Sessions expire 120 seconds after opening; navigation does not extend the deadline. Permissions are checked again for each action. Lists paginate in groups of up to 25 and are refreshed before applying changes.
 
 ## Persistent Message Management
 
@@ -41,11 +44,11 @@ Persistent messages are managed in `src/persistent_messages.py`.
 - Matchmaking message ID is stored in `matchmakingMessageId`.
 - Leaderboard message ID is stored in `leaderboardMessageId`.
 
-Use **Status / Logs -> Recreate messages** when messages are missing, stale, or moved. The recreate flow refreshes admin and matchmaking messages and recreates the leaderboard embed from cached rank data when available.
+Use **Maintenance -> Recreate messages** when messages are missing, stale, or moved. The recreate flow refreshes admin and matchmaking messages and recreates the leaderboard embed from cached rank data when available.
 
 ## Force Refresh Controls
 
-The status panel exposes:
+The Maintenance section exposes:
 
 - **Force leaderboard refresh**: calls `force_leaderboard_refresh()` and updates the leaderboard embed.
 - **Force daily image**: calls `force_daily_rank_image()`, regenerates `Daily Rank list.png`, sends it to `DISCORD_CHANNEL`, and records daily image status.
@@ -70,6 +73,8 @@ Additional controls:
 - Role mode: off, preferred roles, or inverse roles.
 - Captain draft timeout handling.
 
+Public and administrative settings are grouped into Teams, Channels, and Roles. Public controls show current values and disable options locked by administration. Administrators assign roles by selecting a member and a role. Queue removal remains available from the administrative Matchmaking section.
+
 Separate voice channels require Discord permissions to manage channels and move members. Empty generated team channels are cleaned up after voice state updates.
 
 ## Linked Account Operations
@@ -85,9 +90,15 @@ Users can request a link with `/link_discord`. Admins can:
 
 The link state is mirrored into summoner records and the `discordLinks` map stored in PostgreSQL runtime state.
 
+## SoloQ Subscriptions
+
+Open Subscriptions below the leaderboard. Available players lists the Top 25 eligible primary accounts. Selecting a player shows their current server display name, summoner, and subscription state; use Subscribe or Cancel subscription to apply the change. Subscribing requires a successful confirmation DM.
+
+My subscriptions also includes previously subscribed players outside the current eligible list, so those subscriptions can still be cancelled. The private menu lasts 120 seconds and does not change the monitoring scope. Selecting a player alone never changes a subscription.
+
 ## Data Backup
 
-The **Download data backup** admin action exports the PostgreSQL runtime state as a JSON file and includes audit events as JSONL. Use this before manual data recovery or migration work.
+The **Maintenance -> Download backup** action attaches the PostgreSQL runtime state as JSON and audit events as JSONL to the private menu. Download the files before navigating away or the session expires. Use this before manual data recovery or migration work.
 
 For command-line backups, run:
 

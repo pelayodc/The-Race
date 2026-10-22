@@ -53,7 +53,7 @@ def recent_results_text(summoner, in_solo_queue=False):
         else:
             results.append("▫️")
     if in_solo_queue:
-        results[-1] = "🎮"
+        results[0] = "🎮"
     return "".join(results)
 
 
@@ -202,6 +202,7 @@ class LeaderboardView(disnake.ui.View):
 
     @disnake.ui.button(label="Full leaderboard", style=disnake.ButtonStyle.blurple, custom_id="leaderboard:full")
     async def full_leaderboard(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        await inter.response.defer(ephemeral=True)
         json_data = ensure_admin_state(load_json_data())
         summoners = cached_leaderboard_summoners(json_data)
         embed = await leaderboard_embed(
@@ -217,18 +218,8 @@ class LeaderboardView(disnake.ui.View):
 
     @disnake.ui.button(label="Subscriptions", style=disnake.ButtonStyle.gray, custom_id="leaderboard:subscriptions")
     async def subscriptions(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
-        json_data = ensure_admin_state(load_json_data())
-        summoners = cached_leaderboard_summoners(json_data)
-        targets = subscription_targets(json_data, summoners)
-        targets = await refresh_target_display_names(targets, inter.guild)
-        if not targets:
-            await send_ephemeral_response(inter, t(json_data, "solo_queue.no_targets"))
-            return
-        await send_ephemeral_response(
-            inter,
-            t(json_data, "solo_queue.menu_description"),
-            view=SoloQueueSubscriptionView(json_data, inter.author.id, targets)
-        )
+        from discord_menus import open_subscription_menu
+        await open_subscription_menu(inter)
 
 
 class SoloQueueSubscriptionSelect(disnake.ui.Select):

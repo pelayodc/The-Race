@@ -1110,11 +1110,8 @@ class MyRoleButton(disnake.ui.Button):
         )
 
     async def callback(self, inter: disnake.MessageInteraction):
-        json_data = ensure_matchmaking_state(load_json_data())
-        if user_queue_index(json_data["matchmakingQueue"], inter.author.id) is None:
-            await send_ephemeral_response(inter, t(json_data, "matchmaking.only_queued_settings"))
-            return
-        await send_ephemeral_response(inter, t(json_data, "matchmaking.choose_my_role"), view=PlayerRoleView(inter.author.id, json_data))
+        from discord_menus import open_matchmaking_menu
+        await open_matchmaking_menu(inter, "my_role")
 
 class StartMatchButton(disnake.ui.Button):
     def __init__(self, json_data=None):
@@ -1244,11 +1241,8 @@ class MatchmakingView(disnake.ui.View):
 
     @disnake.ui.button(label="Settings", style=disnake.ButtonStyle.blurple, custom_id="matchmaking:settings")
     async def settings(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
-        json_data = ensure_matchmaking_state(load_json_data())
-        if user_queue_index(json_data["matchmakingQueue"], inter.author.id) is None:
-            await send_ephemeral_response(inter, t(json_data, "matchmaking.only_queued_settings"))
-            return
-        await send_ephemeral_response(inter, embed=matchmaking_settings_embed(json_data), view=MatchmakingSettingsView(inter.author.id, json_data))
+        from discord_menus import open_matchmaking_menu
+        await open_matchmaking_menu(inter)
 
 class QueueRemoveSelect(disnake.ui.Select):
     def __init__(self, queue, json_data=None):
