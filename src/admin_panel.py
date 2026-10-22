@@ -636,6 +636,7 @@ class AdminView(disnake.ui.View):
             "admin:matchmaking": "matchmaking.title",
             "admin:status": "admin.status.title",
             "admin:refresh": "admin.status.refresh_status",
+            "admin:soloq_challenge": "menus.challenge",
         }
         for child in self.children:
             key = labels.get(getattr(child, "custom_id", None))
@@ -667,11 +668,18 @@ class AdminView(disnake.ui.View):
         from discord_menus import open_admin_menu
         await open_admin_menu(inter, "status")
 
+    @disnake.ui.button(label="SoloQ Challenge", style=disnake.ButtonStyle.gray, custom_id="admin:soloq_challenge", row=1)
+    async def soloq_challenge(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_admin_interaction(inter):
+            return
+        from challenge_ui import open_challenge
+        await open_challenge(inter, section="admin")
+
     @disnake.ui.button(label="Refresh", style=disnake.ButtonStyle.gray, custom_id="admin:refresh")
     async def refresh_admin_panel(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
         if not await require_admin_interaction(inter):
             return
-
+        await inter.response.defer(ephemeral=True)
         json_data = ensure_admin_state(load_json_data())
         await refresh_configured_matchmaking_message(json_data)
         await refresh_configured_admin_message(json_data)

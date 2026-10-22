@@ -18,6 +18,7 @@ _backoff = 0
 _catalogs = {}
 _tick_lock = asyncio.Lock()
 _budget = None
+_next_guild_index = 0
 
 
 async def riot_json(url):
@@ -129,6 +130,7 @@ async def ensure_channels(guild, edition):
         def remember(document):
             next(e for e in document["editions"] if e["id"] == edition_id)["channels"]["category"] = category.id
         edit_challenges(guild_id, remember)
+        edition["channels"]["category"] = category.id
     stage = phase(edition, timestamp())
     kinds = ("registration", "admin") if stage == "registration" else ("ranking", "shells", "history", "admin")
     for kind in kinds:
@@ -152,7 +154,8 @@ async def ensure_channels(guild, edition):
             await channel.edit(overwrites=overwrites)
         def remember(document):
             next(e for e in document["editions"] if e["id"] == edition_id)["channels"][kind] = channel.id
-        edit_challenges(guild_id, remember)
+        if edition["channels"].get(kind) != channel.id:
+            edit_challenges(guild_id, remember)
         edition["channels"][kind] = channel.id
         if kind == "history":
             continue
@@ -183,6 +186,7 @@ async def publish_history(guild, edition):
     channel = guild.get_channel(edition["channels"].get("history", 0))
     if not channel:
         return
+    recovered = None
     for user_id, player in edition["players"].items():
         for record in player["records"]:
             content = match_text(edition, guild, user_id, record)
@@ -197,17 +201,20 @@ async def publish_history(guild, edition):
                     pass
             if message is None:
                 # Reconcile the outbox after a crash before the sent ID was committed.
-                marker = f"{user_id}:{record['id']}"
-                async for candidate in channel.history(limit=None):
-                    if candidate.author.id == guild.me.id and candidate.embeds and candidate.embeds[0].footer.text == marker:
-                        message = candidate
-                        break
+                if recovered is None:
+                    recovered = {}
+                    async for candidate in channel.history(limit=None):
+                        if candidate.author.id == guild.me.id and candidate.embeds:
+                            recovered[candidate.embeds[0].footer.text] = candidate
+                message = recovered.get(f"{user_id}:{record['id']}")
             embed = disnake.Embed(title=tr(edition, "history"), description=content[:4096], colour=disnake.Colour.dark_teal())
             embed.set_footer(text=f"{user_id}:{record['id']}")
             if message:
                 await message.edit(embed=embed, allowed_mentions=disnake.AllowedMentions.none())
             else:
                 message = await channel.send(embed=embed, allowed_mentions=disnake.AllowedMentions.none())
+            if recovered is not None:
+                recovered[f"{user_id}:{record['id']}"] = message
             def delivered(document):
                 target = next(e for e in document["editions"] if e["id"] == edition["id"])
                 saved = next(r for r in target["players"][user_id]["records"] if r["id"] == record["id"])
@@ -216,31 +223,42 @@ async def publish_history(guild, edition):
 
 
 async def challenge_tick(bot):
-    global _budget
+    global _budget, _next_guild_index
     from utils.commonUtils import requestLimit
     if _tick_lock.locked():
         return
     async with _tick_lock:
         _budget = max(1, int((requestLimit or 100) * 0.35))
-        for guild in bot.guilds:
-            document = read_challenges(guild.id)
-            if not document["editions"]:
-                continue
-            edition = document["editions"][-1]
-            if edition.get("cancelled"):
-                continue
+        guilds = list(bot.guilds)
+        if guilds:
+            start = _next_guild_index % len(guilds)
+            guilds = guilds[start:] + guilds[:start]
+            _next_guild_index = (start + 1) % len(guilds)
+        try:
+            for guild in guilds:
+                try:
+                    await _tick_guild(guild)
+                except Exception:
+                    log.exception("Challenge lifecycle/delivery failed for %s", guild.id)
+        finally:
+            _budget = None
+
+
+async def _tick_guild(guild):
+    document = read_challenges(guild.id)
+    if not document["editions"]:
+        return
+    edition = document["editions"][-1]
+    if edition.get("cancelled"):
+        return
+    if phase(edition, timestamp()) in ("week1", "week2", "settling"):
+        for user_id in sorted(edition["players"], key=lambda uid: edition["players"][uid].get("scan_at", 0)):
+            if _budget <= 0 or timestamp() < _backoff:
+                break
             try:
-                if phase(edition, timestamp()) in ("week1", "week2", "settling"):
-                    for user_id in sorted(edition["players"], key=lambda uid: edition["players"][uid].get("scan_at", 0)):
-                        if _budget <= 0 or timestamp() < _backoff:
-                            break
-                        try:
-                            await collect_player(guild.id, edition["id"], user_id)
-                        except Exception:
-                            log.exception("Challenge scan failed for %s/%s", guild.id, user_id)
-                edition = read_challenges(guild.id)["editions"][-1]
-                await ensure_channels(guild, edition)
-                await publish_history(guild, read_challenges(guild.id)["editions"][-1])
+                await collect_player(guild.id, edition["id"], user_id)
             except Exception:
-                log.exception("Challenge lifecycle/delivery failed for %s", guild.id)
-        _budget = None
+                log.exception("Challenge scan failed for %s/%s", guild.id, user_id)
+    edition = read_challenges(guild.id)["editions"][-1]
+    await ensure_channels(guild, edition)
+    await publish_history(guild, read_challenges(guild.id)["editions"][-1])

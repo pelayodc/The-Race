@@ -91,6 +91,7 @@
     "busy": "Operation failed; retry or contact an administrator."
   },
   "menus": {
+    "challenge": "SoloQ Challenge",
     "change_tab": "Changer d’onglet",
     "tab_label": "Onglet : {name}",
     "entries": "Nombre d’éléments",
@@ -98,6 +99,7 @@
     "my_role": "Mon rôle",
     "session_info": "Session privée · expire 2 minutes après ouverture",
     "tab_info": {
+        "challenge": "Inscriptions, classement, Blue Shells et moderation du SoloQ Challenge.",
         "home": "Vue d’ensemble de la configuration et de l’activité.",
         "settings": "Salons de publication, langue et commandes du classement.",
         "players": "Comptes suivis dans le classement SoloQ.",

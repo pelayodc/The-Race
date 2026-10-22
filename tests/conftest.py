@@ -16,6 +16,7 @@ os.environ.setdefault("RIOT_API_KEY", "test-riot-api-key")
 os.environ.setdefault("DISCORD_CHANNEL", "123456789")
 os.environ.setdefault("REQUESTS", "100")
 os.environ.setdefault("DAILY", "21")
+os.environ["DISCORD_GUILD_ID"] = "10"
 
 
 class FakeResponse:
@@ -68,6 +69,8 @@ def postgres_storage(monkeypatch):
     if not database_url:
         pytest.skip("DATABASE_URL is required for PostgreSQL storage tests.")
 
+    validate_test_database_url(database_url)
+
     monkeypatch.setenv("AUTO_MIGRATE_JSON", "false")
     storage = reset_storage_module()
     storage.initialize_storage()
@@ -77,6 +80,13 @@ def postgres_storage(monkeypatch):
     yield storage
     metadata.drop_all(engine)
     reset_storage_module()
+
+
+def validate_test_database_url(database_url):
+    from sqlalchemy.engine import make_url
+    name = make_url(database_url).database or ""
+    if not (name.startswith("test_") or name.endswith("_test")):
+        raise ValueError("Refusing destructive PostgreSQL tests: database name must start with test_ or end with _test.")
 
 
 @pytest.fixture

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import os
 
 from bot_runtime import MATCHMAKING_ODD_PLAYER_POLICIES, MATCHMAKING_ODD_PLAYER_POLICY_LABELS, MATCHMAKING_ROLE_LABELS, MATCHMAKING_ROLE_MODE_LABELS, MATCHMAKING_ROLE_MODES, MATCHMAKING_ROLE_SOURCE_LABELS, MATCHMAKING_ROLE_SOURCES, MATCHMAKING_ROLES, MATCHMAKING_TEAM_MODES, MATCHMAKING_TEAM_MODE_LABELS
 from i18n import DEFAULT_LANGUAGE, supported_language, t
@@ -29,7 +30,19 @@ def admin_channel_id(json_data):
 
 def can_configure_channels(inter):
     permissions = getattr(inter.author, "guild_permissions", None)
-    return bool(permissions and permissions.manage_guild)
+    return bool(guild_is_allowed(getattr(inter, "guild", None)) and permissions and permissions.manage_guild)
+
+
+def guild_is_allowed(guild):
+    if guild is None:
+        return False
+    configured = os.getenv("DISCORD_GUILD_ID")
+    if configured:
+        return str(getattr(guild, "id", None)) == configured
+    from bot_runtime import bot
+    channel = bot.get_channel(discordChannel)
+    configured_guild = getattr(channel, "guild", None)
+    return bool(configured_guild and getattr(guild, "id", None) == configured_guild.id)
 
 def missing_bot_channel_permissions(channel, bot_member):
     if bot_member is None:

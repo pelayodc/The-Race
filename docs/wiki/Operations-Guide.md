@@ -1,5 +1,27 @@
 # Operations Guide
 
+## SoloQ Challenge Administration
+
+The persistent administration panel includes a **SoloQ Challenge** button. The
+private administration section selector offers the same entry. Both require
+Manage Server in the configured server and open the challenge administration menu.
+If no edition exists, use **Create edition** to open the three-day registration.
+The `/soloq_challenge` command remains available. See [[SoloQ-Challenge]].
+
+## Server and Administrator Restrictions
+
+The global leaderboard, linked accounts and matchmaking belong to one server.
+Set `DISCORD_GUILD_ID` explicitly, or let the bot infer it from the cached
+`DISCORD_CHANNEL`. If neither can identify the server, administrative access is
+denied. Other servers cannot use the slash commands or administer this shared state.
+`/add`, `/remove`, `/admin_matchmaking` and forced `/patch` checks require Manage
+Server; enabling leaderboard chat commands does not remove this requirement.
+Manual `/patch` checks have a per-server 60-second cooldown.
+
+Run only one bot instance against a production database: the legacy snapshot
+storage does not yet support concurrent writers safely. PostgreSQL integration
+tests must use a separate disposable database named `test_*` or `*_test`.
+
 ## Scheduled Leaderboard and Daily Image Updates
 
 `src/bot_events.py` registers `updateRaceImage`, which runs as a background loop. The loop:
@@ -17,7 +39,7 @@ Runtime status is stored through `set_leaderboard_runtime_status()` and `set_dai
 
 `updatePatchNotes` runs every 120 minutes and uses `checkForNewPatchNotes()` in `src/utils/dataUtils.py`. When a new patch is detected, it posts the patch message and optional image to `DISCORD_CHANNEL`.
 
-The `/patch` command runs the same check manually with force behavior.
+The administrator-only `/patch` command runs the same check manually with force behavior.
 
 ## Admin Panel Overview
 

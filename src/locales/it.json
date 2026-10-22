@@ -91,6 +91,7 @@
     "busy": "Operation failed; retry or contact an administrator."
   },
   "menus": {
+    "challenge": "SoloQ Challenge",
     "change_tab": "Cambia scheda",
     "tab_label": "Scheda: {name}",
     "entries": "Totale elementi",
@@ -98,6 +99,7 @@
     "my_role": "Il mio ruolo",
     "session_info": "Sessione privata · scade 2 minuti dopo l’apertura",
     "tab_info": {
+        "challenge": "Iscrizioni, classifica, Blue Shell e moderazione del SoloQ Challenge.",
         "home": "Riepilogo di configurazione e attività del server.",
         "settings": "Canali di pubblicazione, lingua e comandi classifica.",
         "players": "Account monitorati nella classifica SoloQ.",

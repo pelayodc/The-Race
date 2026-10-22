@@ -57,8 +57,13 @@ def register(edition, user_id, account, champions, now):
     user_id = str(user_id)
     if not champions:
         raise RuleError("champions_required")
-    if any(p["puuid"] == account["puuid"] and uid != user_id for uid, p in edition["players"].items()):
-        raise RuleError("account_used")
+    claims = [uid for uid, p in edition["players"].items() if p["puuid"] == account["puuid"] and uid != user_id]
+    if claims:
+        if not account.get("approved", False) or any(edition["players"][uid].get("approved", True) for uid in claims):
+            raise RuleError("account_used")
+        for uid in claims:
+            del edition["players"][uid]
+            audit(edition, "unverified_claim_replaced", user_id, now, previous_user=uid, puuid=account["puuid"])
     edition["players"][user_id] = {**account, "champions": sorted(set(champions)), "records": [], "scan_at": 0}
     audit(edition, "register", user_id, now, puuid=account["puuid"])
 

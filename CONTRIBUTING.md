@@ -52,7 +52,7 @@ Run the fast local suite without PostgreSQL:
 pytest -m "not postgres"
 ```
 
-Run the complete suite with `DATABASE_URL` pointed at PostgreSQL:
+Run the complete suite with `DATABASE_URL` pointed at a dedicated disposable PostgreSQL database. Its name must start with `test_` or end with `_test` (for example, `therace_test`). Tests recreate tables; never use the production database:
 
 ```bash
 pytest

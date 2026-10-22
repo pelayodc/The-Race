@@ -28,7 +28,7 @@ def interaction():
     member = SimpleNamespace(id=99, display_name="Live name", guild_permissions=SimpleNamespace(manage_guild=True))
     message = SimpleNamespace(edit=AsyncMock(), delete=AsyncMock())
     return SimpleNamespace(
-        author=member, guild=SimpleNamespace(get_member=lambda user_id: member, me=member),
+        author=member, guild=SimpleNamespace(id=10, get_member=lambda user_id: member, me=member),
         response=Response(), followup=SimpleNamespace(send=AsyncMock(return_value=message)),
         message=message,
     )

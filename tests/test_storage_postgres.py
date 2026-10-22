@@ -4,6 +4,27 @@ import pytest
 
 
 @pytest.mark.postgres
+def test_targeted_runtime_update_preserves_unrelated_state_and_rolls_back(postgres_storage):
+    state = {"summoners": {"Player#EUW": {"puuid": "p1"}}, "matchData": {}, "matchTimelineData": {},
+             "soloQueueSubscriptions": {"1": ["2"]}, "runtime": 123}
+    postgres_storage.save_state(state)
+    def subscribe(subscriptions):
+        subscriptions["3"] = ["4"]
+        return subscriptions
+    postgres_storage.update_runtime_value("soloQueueSubscriptions", {}, subscribe)
+    loaded = postgres_storage.load_state()
+    assert loaded["summoners"] == state["summoners"]
+    assert loaded["runtime"] == 123
+    assert loaded["soloQueueSubscriptions"] == {"1": ["2"], "3": ["4"]}
+    def fail(subscriptions):
+        subscriptions.clear()
+        raise ValueError("rollback")
+    with pytest.raises(ValueError, match="rollback"):
+        postgres_storage.update_runtime_value("soloQueueSubscriptions", {}, fail)
+    assert postgres_storage.load_state() == loaded
+
+
+@pytest.mark.postgres
 def test_storage_save_load_and_export_roundtrip(postgres_storage):
     state = {
         "summoners": {"Player#EUW": {"tier": "GOLD", "rank": "I"}},

@@ -446,10 +446,13 @@ class ResolveModal(disnake.ui.Modal):
         await self.menu.run(inter, operation, admin=True)
 
 
-async def open_challenge(inter):
+async def open_challenge(inter, section="overview"):
     from storage import database_enabled
-    await inter.response.defer(ephemeral=True)
+    if not inter.response.is_done():
+        await inter.response.defer(ephemeral=True)
     if not inter.guild or not database_enabled():
         await inter.followup.send("SoloQ Challenge requires a server and PostgreSQL.", ephemeral=True)
         return
-    await ChallengeMenu(inter).render(inter)
+    menu = ChallengeMenu(inter)
+    menu.section = section
+    await menu.render(inter)

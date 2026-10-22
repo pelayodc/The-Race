@@ -40,7 +40,10 @@ def _ensure_engine():
         return _engine, _metadata, _tables
 
     sa, JSONB = _sqlalchemy()
-    _engine = sa.create_engine(current_url, pool_pre_ping=True)
+    _engine = sa.create_engine(
+        current_url, pool_pre_ping=True, pool_timeout=10,
+        connect_args={"connect_timeout": 10, "options": "-c statement_timeout=30000 -c lock_timeout=5000"},
+    )
     _engine_url = current_url
     _metadata = sa.MetaData()
     _tables = {
@@ -162,6 +165,20 @@ def load_state(json_file_path=None):
         for row in connection.execute(tables["runtime_state"].select()):
             state[row.key] = row.value
     return state
+
+
+def update_runtime_value(key, default, change):
+    """Mutate one runtime value without replacing unrelated state snapshots."""
+    from sqlalchemy.dialects.postgresql import insert
+    initialize_storage()
+    engine, _, tables = _ensure_engine()
+    table = tables["runtime_state"]
+    with engine.begin() as connection:
+        connection.execute(insert(table).values(key=key, value=default).on_conflict_do_nothing())
+        value = connection.execute(table.select().where(table.c.key == key).with_for_update()).one().value
+        result = change(value)
+        connection.execute(table.update().where(table.c.key == key).values(value=value))
+    return result
 
 
 def save_state(state):

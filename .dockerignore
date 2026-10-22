@@ -4,6 +4,18 @@
 __pycache__
 *.pyc
 .env
+.env.*
+!.env.example
+.specify
+.agents
+.codex
+.aws
+.ssh
+specs
+simulation-report
+nohup.out
+**/nohup.out
+**/logs
 data.json
 logs/
 Rank list.png

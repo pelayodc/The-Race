@@ -22,7 +22,7 @@ PLATFORM_REGIONS = {
     **dict.fromkeys(("JP1", "KR"), "ASIA"),
     **dict.fromkeys(("OC1", "PH2", "SG2", "TH2", "TW2", "VN2"), "SEA"),
 }
-ADMIN_SECTIONS = ("home", "settings", "players", "links", "requests", "matchmaking", "status", "logs", "maintenance")
+ADMIN_SECTIONS = ("home", "settings", "players", "links", "requests", "matchmaking", "challenge", "status", "logs", "maintenance")
 
 
 def text(data, key, **values):
@@ -123,6 +123,18 @@ class AdminMenu(Menu):
         super().__init__(owner_id, admin=True)
         self.category = None
         self.actor_query = None
+
+    async def go(self, inter, section):
+        if section == "challenge":
+            from discord_helpers import require_admin_interaction
+            if not await require_admin_interaction(inter):
+                return
+            await self.session.acknowledge(inter)
+            await self.session.expire()
+            from challenge_ui import open_challenge
+            await open_challenge(inter, section="admin")
+            return
+        await super().go(inter, section)
 
     async def render(self, inter, notice=None, detail=None):
         from admin_panel import admin_embed, settings_admin_embed

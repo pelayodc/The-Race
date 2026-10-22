@@ -49,7 +49,11 @@ def riot_get(url, context):
     if riotBackoffRemaining() > 0:
         return False, None, riotBackoffRemaining()
 
-    response = requests.get(url)
+    try:
+        response = requests.get(url, timeout=15)
+    except requests.RequestException:
+        record_riot_error(context, "Riot request failed or timed out.")
+        return False, None, None
     if response.status_code == 429:
         retryAfter = int(response.headers.get("Retry-After", 60))
         riotBackoffUntil = time.time() + retryAfter
@@ -80,7 +84,11 @@ def riot_get_status(url, context, allowed_statuses=None):
     if riotBackoffRemaining() > 0:
         return False, None, riotBackoffRemaining(), None
 
-    response = requests.get(url)
+    try:
+        response = requests.get(url, timeout=15)
+    except requests.RequestException:
+        record_riot_error(context, "Riot request failed or timed out.")
+        return False, None, None, None
     if response.status_code in allowed_statuses:
         return True, None, None, response.status_code
 
@@ -522,7 +530,7 @@ def checkForNewPatchNotes(jsonFilePath, forceUpdate):
         return None
 
     def downloadImage(imageUrl, saveDir):
-        response = requests.get(imageUrl)
+        response = requests.get(imageUrl, timeout=15)
         if response.status_code == 200:
             # Create the directory if it doesn't exist
             os.makedirs(saveDir, exist_ok=True)
@@ -556,7 +564,7 @@ def checkForNewPatchNotes(jsonFilePath, forceUpdate):
     # URL of the League of Legends patch notes page
     url = "https://www.leagueoflegends.com/en-us/news/tags/patch-notes/"
 
-    response = requests.get(url)
+    response = requests.get(url, timeout=15)
     if response.status_code != 200:
         print(f"Failed to fetch patch notes. Status code: {response.status_code}")
         return False, None, daysAgo, daysUntilNextPatch, None, None
@@ -594,7 +602,7 @@ def checkForNewPatchNotes(jsonFilePath, forceUpdate):
         daysUntilNextPatch = (nextPatchDate - dateNow).days + 1
 
     if (patchVersion(newPatch) > patchVersion(latestPatch)) or forceUpdate:
-        patchResponse = requests.get(fullUrl)
+        patchResponse = requests.get(fullUrl, timeout=15)
         if patchResponse.status_code != 200:
             print(f"Failed to fetch patch article. Status code: {patchResponse.status_code}")
             return False, None, daysAgo, daysUntilNextPatch, None, None

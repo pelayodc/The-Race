@@ -456,7 +456,8 @@ async def add_summoner_to_data(name, tagline, platform, region):
         return False, t(json_data, "leaderboard.already_added", summoner=summoner_full_name)
 
     response = requests.get(
-        f'https://{region}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{name}/{tagline}?api_key={riotApKey}'
+        f'https://{region}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{quote(name, safe="")}/{quote(tagline, safe="")}',
+        headers={"X-Riot-Token": riotApKey}, timeout=15,
     )
     if response.status_code != 200:
         return False, t(json_data, "leaderboard.invalid_summoner", summoner=summoner_full_name)
@@ -466,7 +467,8 @@ async def add_summoner_to_data(name, tagline, platform, region):
     summoner_puuid = account_data['puuid']
 
     response = requests.get(
-        f'https://{platform}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/{summoner_puuid}?api_key={riotApKey}'
+        f'https://{platform}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/{quote(summoner_puuid, safe="")}',
+        headers={"X-Riot-Token": riotApKey}, timeout=15,
     )
     if response.status_code != 200:
         return False, t(json_data, "leaderboard.profile_fetch_failed", summoner=summoner_full_name)

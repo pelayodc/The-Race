@@ -17,6 +17,9 @@ from utils.commonUtils import jsonFile
 from utils.jsonUtils import writeToJsonFile
 
 
+_match_start_lock = asyncio.Lock()
+
+
 def user_queue_index(queue, user_id):
     user_id = str(user_id)
     for index, player in enumerate(queue):
@@ -521,6 +524,13 @@ async def active_matchmaking_queue(guild, json_data):
     return active_queue
 
 async def finish_matchmaking_teams(guild, json_data, team_one, team_two, mode, note=None):
+    if _match_start_lock.locked():
+        return False, t(json_data, "menus.busy"), json_data
+    async with _match_start_lock:
+        return await _finish_matchmaking_teams(guild, json_data, team_one, team_two, mode, note)
+
+
+async def _finish_matchmaking_teams(guild, json_data, team_one, team_two, mode, note=None):
     team_one, team_two = ensure_role_assignments(json_data, team_one, team_two)
     json_data["matchmakingInProgress"] = True
     writeToJsonFile(jsonFile, json_data)
@@ -535,9 +545,9 @@ async def finish_matchmaking_teams(guild, json_data, team_one, team_two, mode, n
             if first_voice:
                 category = first_voice.category
 
-            overwrites = {
-                guild.default_role: disnake.PermissionOverwrite(view_channel=True, connect=True)
-            }
+            overwrites = dict(category.overwrites) if category else {}
+            if first_voice:
+                overwrites.update(first_voice.overwrites)
             team_one_channel = await guild.create_voice_channel("Team 1", category=category, overwrites=overwrites)
             team_two_channel = await guild.create_voice_channel("Team 2", category=category, overwrites=overwrites)
             created_channels = [team_one_channel.id, team_two_channel.id]
@@ -971,6 +981,9 @@ class AdminTeamModeLockSelect(disnake.ui.Select):
         if not await require_admin_interaction(inter):
             return
         json_data = ensure_matchmaking_state(load_json_data())
+        if _match_start_lock.locked():
+            await send_ephemeral_followup(inter, t(json_data, "menus.busy"))
+            return
         if json_data.get("matchmakingDraft"):
             await send_ephemeral_response(inter, t(json_data, "matchmaking.team_lock_active"))
             return
@@ -1211,6 +1224,9 @@ class MatchmakingView(disnake.ui.View):
     async def leave(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
         await inter.response.defer(ephemeral=True)
         json_data = ensure_matchmaking_state(load_json_data())
+        if _match_start_lock.locked():
+            await send_ephemeral_followup(inter, t(json_data, "menus.busy"))
+            return
         if not remove_user_from_matchmaking_queue(json_data, inter.author.id):
             await send_ephemeral_followup(inter, t(json_data, "matchmaking.not_in_queue"))
             return

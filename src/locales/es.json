@@ -91,6 +91,7 @@
     "busy": "La operación falló; reintenta o contacta con administración."
   },
   "menus": {
+    "challenge": "SoloQ Challenge",
     "change_tab": "Cambiar de pestaña",
     "tab_label": "Pestaña: {name}",
     "entries": "Total de elementos",
@@ -98,6 +99,7 @@
     "my_role": "Mi rol",
     "session_info": "Sesión privada · caduca a los 2 minutos desde su apertura",
     "tab_info": {
+        "challenge": "Inscripciones, clasificacion, Blue Shells y moderacion del SoloQ Challenge.",
         "home": "Resumen de configuración y actividad del servidor.",
         "settings": "Canales de publicación, idioma y comandos de clasificación.",
         "players": "Cuentas incluidas en el seguimiento de la clasificación SoloQ.",

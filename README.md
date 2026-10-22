@@ -126,7 +126,7 @@ python3 -m pip install -r requirements.txt -r requirements-dev.txt
 pytest -m "not postgres"
 ```
 
-To run the complete suite, configure `DATABASE_URL` for a PostgreSQL database and run `pytest`. Tests mock Discord/Riot interactions and do not require real tokens.
+To run the complete suite, configure `DATABASE_URL` for a dedicated disposable PostgreSQL database and run `pytest`. Its name must start with `test_` or end with `_test` (for example, `therace_test`); the tests recreate its tables. Never use the bot's production database. Tests mock Discord/Riot interactions and do not require real tokens.
 
 ## License
 

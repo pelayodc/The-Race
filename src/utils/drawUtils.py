@@ -28,7 +28,8 @@ def drawChampionImage(canvas, x, y, champ, win, remake, mvp, size=100, drawMvpBa
         if os.path.exists(imgPath):
             img = Image.open(imgPath).convert("RGBA")
         else:
-            response = requests.get(f"http://ddragon.leagueoflegends.com/cdn/{version}/img/champion/{champName}.png")
+            response = requests.get(f"https://ddragon.leagueoflegends.com/cdn/{version}/img/champion/{champName}.png", timeout=15)
+            response.raise_for_status()
             img = Image.open(BytesIO(response.content)).convert("RGBA")
             os.makedirs(os.path.dirname(imgPath), exist_ok=True)
             img.save(imgPath)
@@ -76,7 +77,8 @@ def drawChampionImage(canvas, x, y, champ, win, remake, mvp, size=100, drawMvpBa
 
 
 def drawURLImage(canvas, url, x, y, w=0, opacity=1.0, cropTop=None, cropBottom=None, makeRound=False):
-    response = requests.get(url)
+    response = requests.get(url, timeout=15)
+    response.raise_for_status()
     img = Image.open(BytesIO(response.content))
     img = img.convert("RGBA")
 

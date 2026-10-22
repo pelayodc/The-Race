@@ -16,6 +16,14 @@ from utils.jsonUtils import openJsonFile, writeToJsonFile
 
 
 def register_commands(bot):
+    @bot.slash_command_check
+    async def allowed_server(inter):
+        from state import guild_is_allowed
+        if guild_is_allowed(inter.guild):
+            return True
+        await send_ephemeral_inter_send(inter, t(ensure_admin_state(load_json_data()), "common.server_only"))
+        return False
+
     @bot.slash_command(name="soloq_challenge", description="Open SoloQ Challenge registration, standings and Blue Shells")
     async def soloqchallenge(inter: ApplicationCommandInteraction):
         from challenge_ui import open_challenge
@@ -54,7 +62,10 @@ def register_commands(bot):
             await inter.send(embed=embed, view=view)
 
     @bot.slash_command(description="Patch notes")
+    @commands.cooldown(1, 60, commands.BucketType.guild)
     async def patch(inter: ApplicationCommandInteraction):
+        if not await require_admin_interaction(inter):
+            return
         await inter.response.defer()
         update_available, updated_patch, days_ago, days_till_next, full_url, image_path = checkForNewPatchNotes(jsonFile, True)
         if update_available:
@@ -74,6 +85,8 @@ def register_commands(bot):
 
     @bot.slash_command(name="admin_matchmaking", description="Create or refresh the matchmaking message")
     async def matchmaking(inter: ApplicationCommandInteraction):
+        if not await require_admin_interaction(inter):
+            return
         await inter.response.defer(ephemeral=True)
         message_id = await setup_matchmaking_message()
         if message_id:
@@ -219,6 +232,8 @@ def register_commands(bot):
 
     @bot.slash_command(description="Add summoner to the list")
     async def add(inter: ApplicationCommandInteraction, name: str, tagline: str, platform: str = commands.Param(choices=platforms), region: str = commands.Param(choices=regions)):
+        if not await require_admin_interaction(inter):
+            return
         await inter.response.defer(ephemeral=True)
         json_data = ensure_admin_state(load_json_data())
         if not leaderboard_chat_commands_enabled(json_data):
@@ -234,6 +249,8 @@ def register_commands(bot):
 
     @bot.slash_command(description="Remove summoner from the list")
     async def remove(inter: ApplicationCommandInteraction, name: str, tagline: str):
+        if not await require_admin_interaction(inter):
+            return
         await inter.response.defer(ephemeral=True)
         json_data = ensure_admin_state(load_json_data())
         if not leaderboard_chat_commands_enabled(json_data):

@@ -140,6 +140,31 @@ async def send_dm(user_id, message):
         return False
 
 
+def persist_subscription(json_data, subscriber_id, player_id, enabled):
+    from storage import database_enabled, update_runtime_value
+
+    def change(subscriptions):
+        values = [str(v) for v in subscriptions.get(subscriber_id, []) if str(v) != player_id]
+        if enabled:
+            values.append(player_id)
+        if values:
+            subscriptions[subscriber_id] = values
+        else:
+            subscriptions.pop(subscriber_id, None)
+        return subscriptions
+
+    if database_enabled():
+        json_data["soloQueueSubscriptions"] = update_runtime_value("soloQueueSubscriptions", {}, change)
+    else:
+        latest = load_json_data() or json_data
+        ensure_solo_queue_state(latest)
+        change(latest["soloQueueSubscriptions"])
+        writeToJsonFile(jsonFile, latest)
+        if latest is not json_data:
+            json_data.clear()
+            json_data.update(latest)
+
+
 async def toggle_subscription(json_data, subscriber_id, target):
     ensure_solo_queue_state(json_data)
     subscriber_id = str(subscriber_id)
@@ -148,21 +173,14 @@ async def toggle_subscription(json_data, subscriber_id, target):
     subscriptions = [str(value) for value in subscriptions]
 
     if player_id in subscriptions:
-        subscriptions.remove(player_id)
-        if subscriptions:
-            json_data["soloQueueSubscriptions"][subscriber_id] = subscriptions
-        else:
-            json_data["soloQueueSubscriptions"].pop(subscriber_id, None)
-        writeToJsonFile(jsonFile, json_data)
+        persist_subscription(json_data, subscriber_id, player_id, False)
         return True, t(json_data, "solo_queue.unsubscribed", summoner=target["summonerFullName"])
 
     message = t(json_data, "solo_queue.dm_confirmed", summoner=target["summonerFullName"])
     if not await send_dm(subscriber_id, message):
         return False, t(json_data, "solo_queue.dm_closed")
 
-    subscriptions.append(player_id)
-    json_data["soloQueueSubscriptions"][subscriber_id] = subscriptions
-    writeToJsonFile(jsonFile, json_data)
+    persist_subscription(json_data, subscriber_id, player_id, True)
     return True, t(json_data, "solo_queue.subscribed", summoner=target["summonerFullName"])
 
 
