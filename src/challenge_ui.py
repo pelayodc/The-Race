@@ -447,7 +447,10 @@ class ResolveModal(disnake.ui.Modal):
 
 
 async def open_challenge(inter, section="overview"):
+    from discord_helpers import require_allowed_guild
     from storage import database_enabled
+    if not await require_allowed_guild(inter):
+        return
     if not inter.response.is_done():
         await inter.response.defer(ephemeral=True)
     if not inter.guild or not database_enabled():

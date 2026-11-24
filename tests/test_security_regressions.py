@@ -204,3 +204,156 @@ async def test_team_channels_preserve_private_source_permissions(monkeypatch):
     assert result[0]
     assert len(created) == 2
     assert all(c["overwrites"][private_role].view_channel is False for c in created)
+
+
+@pytest.mark.parametrize("status", [False, True])
+def test_riot_requests_send_token_in_header_and_no_query_key_in_src(status, monkeypatch):
+    from pathlib import Path
+    from utils import dataUtils
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = "{}"
+        headers = {}
+
+        def json(self):
+            return {"ok": True}
+
+    def fake_get(url, **kwargs):
+        captured["url"] = url
+        captured["headers"] = kwargs.get("headers")
+        return FakeResponse()
+
+    monkeypatch.setattr(dataUtils, "riotApKey", "secret-token")
+    monkeypatch.setattr(dataUtils.requests, "get", fake_get)
+    monkeypatch.setattr(dataUtils, "riotBackoffRemaining", lambda: 0)
+
+    fn = dataUtils.riot_get_status if status else dataUtils.riot_get
+    result = fn("https://euw1.api.riotgames.com/lol/test", "test")
+    assert result[0] is True
+    assert captured["headers"] == {"X-Riot-Token": "secret-token"}
+    assert "api_key=" not in captured["url"]
+
+    src_root = Path(__file__).resolve().parents[1] / "src"
+    offenders = [
+        str(p.relative_to(src_root))
+        for p in src_root.rglob("*.py")
+        if "api_key=" in p.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
+
+
+@pytest.mark.asyncio
+async def test_matchmaking_join_is_blocked_while_start_lock_is_held(monkeypatch, no_database):
+    import asyncio
+    import matchmaking as mm
+
+    lock = asyncio.Lock()
+    await lock.acquire()
+    monkeypatch.setattr(mm, "_match_start_lock", lock)
+    monkeypatch.setattr(mm, "require_allowed_guild", AsyncMock(return_value=True))
+    followup = AsyncMock()
+    monkeypatch.setattr(mm, "send_ephemeral_followup", followup)
+    writes = []
+    monkeypatch.setattr(mm, "writeToJsonFile", lambda *args: writes.append(args))
+
+    view = mm.MatchmakingView()
+    join_btn = next(c for c in view.children if c.custom_id == "matchmaking:join")
+    inter = SimpleNamespace(
+        guild=SimpleNamespace(id=10),
+        author=SimpleNamespace(id=1, display_name="P1", voice=SimpleNamespace(channel=SimpleNamespace(id=99))),
+        response=SimpleNamespace(defer=AsyncMock()),
+    )
+    try:
+        await join_btn.callback(inter)
+    finally:
+        lock.release()
+
+    assert writes == []
+    followup.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_public_persistent_views_reject_disallowed_guild(monkeypatch, no_database):
+    import challenge_ui
+    import discord_helpers
+    import leaderboard
+    import matchmaking as mm
+
+    monkeypatch.setenv("DISCORD_GUILD_ID", "10")
+    ephemeral = AsyncMock()
+    monkeypatch.setattr(discord_helpers, "send_ephemeral", ephemeral)
+
+    bad_inter = SimpleNamespace(
+        guild=SimpleNamespace(id=999),
+        author=SimpleNamespace(id=1),
+        response=SimpleNamespace(defer=AsyncMock(), is_done=lambda: False),
+    )
+
+    lb_view = leaderboard.LeaderboardView()
+    for cid in ("leaderboard:full", "leaderboard:subscriptions"):
+        btn = next(c for c in lb_view.children if c.custom_id == cid)
+        await btn.callback(bad_inter)
+
+    mm_view = mm.MatchmakingView()
+    for cid in ("matchmaking:join", "matchmaking:leave", "matchmaking:settings"):
+        btn = next(c for c in mm_view.children if c.custom_id == cid)
+        await btn.callback(bad_inter)
+
+    await challenge_ui.open_challenge(bad_inter)
+
+    bad_inter.response.defer.assert_not_awaited()
+    assert ephemeral.await_count == 6
+
+
+def test_patch_image_download_validates_url_extension_and_size(tmp_path, monkeypatch):
+    from utils import dataUtils
+
+    assert dataUtils.is_allowed_patch_url("https://www.leagueoflegends.com/en-us/news/game-updates/patch-26-10-notes/")
+    assert dataUtils.is_allowed_patch_url("https://cmsassets.rgpub.io/sanity/images/patch.jpg")
+    assert not dataUtils.is_allowed_patch_url("http://www.leagueoflegends.com/patch.jpg")
+    assert not dataUtils.is_allowed_patch_url("https://evil.example/patch.jpg")
+    assert not dataUtils.is_allowed_patch_url("https://leagueoflegends.com.evil.example/patch.jpg")
+
+    ok, path = dataUtils.download_patch_image("https://evil.example/patch.jpg", str(tmp_path))
+    assert (ok, path) == (False, None)
+
+    ok, path = dataUtils.download_patch_image("https://cmsassets.rgpub.io/payload.exe", str(tmp_path))
+    assert (ok, path) == (False, None)
+
+    class FakeStreamResponse:
+        def __init__(self, chunks, url="https://cmsassets.rgpub.io/patch.png", status_code=200):
+            self._chunks = chunks
+            self.url = url
+            self.status_code = status_code
+
+        def iter_content(self, chunk_size=65536):
+            return iter(self._chunks)
+
+    monkeypatch.setattr(
+        dataUtils.requests,
+        "get",
+        lambda url, **kwargs: FakeStreamResponse([b"a" * 10, b"b" * 10]),
+    )
+    ok, path = dataUtils.download_patch_image("https://cmsassets.rgpub.io/patch.png", str(tmp_path), max_bytes=15)
+    assert (ok, path) == (False, None)
+
+    monkeypatch.setattr(
+        dataUtils.requests,
+        "get",
+        lambda url, **kwargs: FakeStreamResponse([b"ok"], url="https://evil.example/redirect.png"),
+    )
+    ok, path = dataUtils.download_patch_image("https://cmsassets.rgpub.io/patch.png", str(tmp_path), max_bytes=100)
+    assert (ok, path) == (False, None)
+
+    monkeypatch.setattr(
+        dataUtils.requests,
+        "get",
+        lambda url, **kwargs: FakeStreamResponse([b"pngdata"]),
+    )
+    ok, path = dataUtils.download_patch_image("https://cmsassets.rgpub.io/patch.PNG?v=1", str(tmp_path), max_bytes=100)
+    assert ok is True
+    assert path.endswith("patch_image.png")
+    assert open(path, "rb").read() == b"pngdata"

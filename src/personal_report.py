@@ -575,7 +575,7 @@ async def fetch_match_timeline(json_data, summoner_name, match_id):
         return False, None, "RIOT_API_KEY is not configured."
 
     ok, timeline_data, retry_after = riot_get(
-        f"https://{region}.api.riotgames.com/lol/match/v5/matches/{match_id}/timeline?api_key={riotApKey}",
+        f"https://{region}.api.riotgames.com/lol/match/v5/matches/{match_id}/timeline",
         f"match timeline {match_id}"
     )
     if not ok or not timeline_data:

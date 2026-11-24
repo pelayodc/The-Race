@@ -186,7 +186,7 @@ async def toggle_subscription(json_data, subscriber_id, target):
 
 async def fetch_active_game(summoner):
     ok, data, retry_after, status = riot_get_status(
-        f"https://{summoner.platform}.api.riotgames.com/lol/spectator/v5/active-games/by-summoner/{summoner.puuid}?api_key={riotApKey}",
+        f"https://{summoner.platform}.api.riotgames.com/lol/spectator/v5/active-games/by-summoner/{summoner.puuid}",
         f"active game for {summoner.fullName}",
         allowed_statuses=[404]
     )

@@ -4,8 +4,7 @@ import disnake
 
 from bot_runtime import EPHEMERAL_DELETE_SECONDS, bot
 from i18n import t
-from state import load_json_data
-from state import can_configure_channels
+from state import can_configure_channels, guild_is_allowed, load_json_data
 
 
 def format_patch_notes_message(json_data, updated_patch, days_ago, days_till_next, full_url):
@@ -129,6 +128,14 @@ def public_matchmaking_announcement(message):
         or message.startswith("Partida iniciada")
         or message.startswith("Draft de capitanes iniciado")
     ))
+
+async def require_allowed_guild(inter):
+    if guild_is_allowed(getattr(inter, "guild", None)):
+        return True
+    json_data = load_json_data()
+    await send_ephemeral(inter, t(json_data, "common.server_only"))
+    return False
+
 
 async def require_admin_interaction(inter):
     json_data = load_json_data()

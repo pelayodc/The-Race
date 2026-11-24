@@ -7,7 +7,7 @@ from itertools import combinations, permutations
 import disnake
 
 from bot_runtime import CAPTAIN_DRAFT_TIMEOUT_SECONDS, MATCHMAKING_ODD_PLAYER_POLICIES, MATCHMAKING_ROLE_MODES, MATCHMAKING_ROLE_SOURCES, MATCHMAKING_ROLES, MATCHMAKING_TEAM_MODES, MAX_SELECT_OPTIONS
-from discord_helpers import get_discord_channel, get_guild_member, public_matchmaking_announcement, require_admin_interaction, send_ephemeral_followup, send_ephemeral_response, send_temporary_public_message
+from discord_helpers import get_discord_channel, get_guild_member, public_matchmaking_announcement, require_admin_interaction, require_allowed_guild, send_ephemeral_followup, send_ephemeral_response, send_temporary_public_message
 from i18n import t
 from linked_accounts import primary_summoner_queue_data
 from persistent_messages import refresh_configured_admin_message, refresh_configured_matchmaking_message
@@ -1183,14 +1183,19 @@ class MatchmakingView(disnake.ui.View):
 
     @disnake.ui.button(label="Join", style=disnake.ButtonStyle.green, custom_id="matchmaking:join")
     async def join(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_allowed_guild(inter):
+            return
         await inter.response.defer(ephemeral=True)
+        json_data = ensure_matchmaking_state(load_json_data())
+        if _match_start_lock.locked():
+            await send_ephemeral_followup(inter, t(json_data, "menus.busy"))
+            return
         member = inter.author
         voice_channel = member.voice.channel if getattr(member, "voice", None) and member.voice else None
         if voice_channel is None:
-            await send_ephemeral_followup(inter, t(ensure_matchmaking_state(load_json_data()), "matchmaking.need_voice"))
+            await send_ephemeral_followup(inter, t(json_data, "matchmaking.need_voice"))
             return
 
-        json_data = ensure_matchmaking_state(load_json_data())
         if json_data.get("matchmakingDraft"):
             await send_ephemeral_followup(inter, t(json_data, "matchmaking.draft_active_join"))
             return
@@ -1222,6 +1227,8 @@ class MatchmakingView(disnake.ui.View):
 
     @disnake.ui.button(label="Leave", style=disnake.ButtonStyle.red, custom_id="matchmaking:leave")
     async def leave(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_allowed_guild(inter):
+            return
         await inter.response.defer(ephemeral=True)
         json_data = ensure_matchmaking_state(load_json_data())
         if _match_start_lock.locked():
@@ -1257,6 +1264,8 @@ class MatchmakingView(disnake.ui.View):
 
     @disnake.ui.button(label="Settings", style=disnake.ButtonStyle.blurple, custom_id="matchmaking:settings")
     async def settings(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_allowed_guild(inter):
+            return
         from discord_menus import open_matchmaking_menu
         await open_matchmaking_menu(inter)
 

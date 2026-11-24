@@ -14,6 +14,66 @@ from .auditUtils import log_event, system_actor
 
 riotBackoffUntil = 0
 HIGH_ELO_CACHE_SECONDS = 600
+ALLOWED_PATCH_HOSTS = ("leagueoflegends.com", "riotgames.com", "rgpub.io")
+ALLOWED_PATCH_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
+MAX_PATCH_IMAGE_BYTES = 15 * 1024 * 1024
+
+
+def is_allowed_patch_url(url):
+    parsed = urlparse(str(url or ""))
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not host:
+        return False
+    return any(host == allowed or host.endswith(f".{allowed}") for allowed in ALLOWED_PATCH_HOSTS)
+
+
+def download_patch_image(image_url, save_dir, max_bytes=MAX_PATCH_IMAGE_BYTES):
+    if not is_allowed_patch_url(image_url):
+        print("Rejected patch image URL outside allowed Riot domains.")
+        return False, None
+
+    parsed_url = urlparse(image_url)
+    cleaned_filename = os.path.basename(unquote(parsed_url.path))
+    filename_parts = cleaned_filename.rsplit(".", 1)
+    if len(filename_parts) != 2:
+        print("Failed to extract file extension from image URL.")
+        return False, None
+    file_extension = filename_parts[1].lower()
+    if file_extension not in ALLOWED_PATCH_EXTENSIONS:
+        print(f"Rejected unsupported patch image extension: {file_extension}")
+        return False, None
+
+    try:
+        response = requests.get(image_url, timeout=15, stream=True)
+    except requests.RequestException:
+        print("Failed to download image.")
+        return False, None
+
+    if response.status_code != 200:
+        print("Failed to download image.")
+        return False, None
+
+    if not is_allowed_patch_url(getattr(response, "url", None) or image_url):
+        print("Rejected patch image redirect outside allowed Riot domains.")
+        return False, None
+
+    chunks = []
+    total = 0
+    for chunk in response.iter_content(chunk_size=65536):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > max_bytes:
+            print("Rejected patch image exceeding maximum allowed size.")
+            return False, None
+        chunks.append(chunk)
+
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, f"patch_image.{file_extension}")
+    with open(save_path, "wb") as f:
+        for chunk in chunks:
+            f.write(chunk)
+    return True, save_path
 
 
 def riotBackoffRemaining():
@@ -50,7 +110,7 @@ def riot_get(url, context):
         return False, None, riotBackoffRemaining()
 
     try:
-        response = requests.get(url, timeout=15)
+        response = requests.get(url, headers={"X-Riot-Token": riotApKey}, timeout=15)
     except requests.RequestException:
         record_riot_error(context, "Riot request failed or timed out.")
         return False, None, None
@@ -85,7 +145,7 @@ def riot_get_status(url, context, allowed_statuses=None):
         return False, None, riotBackoffRemaining(), None
 
     try:
-        response = requests.get(url, timeout=15)
+        response = requests.get(url, headers={"X-Riot-Token": riotApKey}, timeout=15)
     except requests.RequestException:
         record_riot_error(context, "Riot request failed or timed out.")
         return False, None, None, None
@@ -239,7 +299,7 @@ def fetchAllSummonerData(force, daily):
         # print(f'Fetching {summoner.fullName} rank data')
         try:
             ok, riotApiData, retryAfter = riot_get(
-                f'https://{summoner.platform}.api.riotgames.com/lol/league/v4/entries/by-puuid/{summoner.puuid}?api_key={riotApKey}',
+                f'https://{summoner.platform}.api.riotgames.com/lol/league/v4/entries/by-puuid/{summoner.puuid}',
                 f"rank data for {summoner.fullName}"
             )
             if not ok:
@@ -362,9 +422,9 @@ def fetchAllSummonerData(force, daily):
                 continue
 
             urls = [
-                f"https://{platform.lower()}.api.riotgames.com/lol/league/v4/masterleagues/by-queue/RANKED_SOLO_5x5?api_key={riotApKey}",
-                f"https://{platform.lower()}.api.riotgames.com/lol/league/v4/grandmasterleagues/by-queue/RANKED_SOLO_5x5?api_key={riotApKey}",
-                f"https://{platform.lower()}.api.riotgames.com/lol/league/v4/challengerleagues/by-queue/RANKED_SOLO_5x5?api_key={riotApKey}",
+                f"https://{platform.lower()}.api.riotgames.com/lol/league/v4/masterleagues/by-queue/RANKED_SOLO_5x5",
+                f"https://{platform.lower()}.api.riotgames.com/lol/league/v4/grandmasterleagues/by-queue/RANKED_SOLO_5x5",
+                f"https://{platform.lower()}.api.riotgames.com/lol/league/v4/challengerleagues/by-queue/RANKED_SOLO_5x5",
             ]
 
             combinedHighEloPlayers = []
@@ -412,7 +472,7 @@ def fetchAllSummonerData(force, daily):
             # solo 420 flex 440
             if summoner in summonersToRefreshMatches:
                 ok, riotApiData, retryAfter = riot_get(
-                    f'https://{summoner.region}.api.riotgames.com/lol/match/v5/matches/by-puuid/{summoner.puuid}/ids?queue=420&start=0&count=5&api_key={riotApKey}',
+                    f'https://{summoner.region}.api.riotgames.com/lol/match/v5/matches/by-puuid/{summoner.puuid}/ids?queue=420&start=0&count=5',
                     f"match ids for {summoner.fullName}"
                 )
                 if not ok or not isinstance(riotApiData, list):
@@ -432,7 +492,7 @@ def fetchAllSummonerData(force, daily):
                 else:
                     # print(f'Fetching {matchId}')
                     ok, matchData, retryAfter = riot_get(
-                        f'https://{summoner.region}.api.riotgames.com/lol/match/v5/matches/{matchId}?api_key={riotApKey}',
+                        f'https://{summoner.region}.api.riotgames.com/lol/match/v5/matches/{matchId}',
                         f"match data {matchId}"
                     )
                     if not ok:
@@ -530,32 +590,7 @@ def checkForNewPatchNotes(jsonFilePath, forceUpdate):
         return None
 
     def downloadImage(imageUrl, saveDir):
-        response = requests.get(imageUrl, timeout=15)
-        if response.status_code == 200:
-            # Create the directory if it doesn't exist
-            os.makedirs(saveDir, exist_ok=True)
-
-            # Parse the URL to remove query parameters
-            parsedUrl = urlparse(imageUrl)
-            cleanedFilename = os.path.basename(unquote(parsedUrl.path))
-
-            # Split the filename and extension
-            filenameParts = cleanedFilename.split('.')
-            if len(filenameParts) > 1:
-                # Use the last part as the file extension
-                fileExtension = filenameParts[-1]
-                # Construct the full path to save the image with correct extension
-                savePath = os.path.join(saveDir, f"patch_image.{fileExtension}")
-                # Save the image
-                with open(savePath, 'wb') as f:
-                    f.write(response.content)
-                return True, savePath
-            else:
-                print("Failed to extract file extension from image URL.")
-                return False, None
-        else:
-            print("Failed to download image.")
-            return False, None
+        return download_patch_image(imageUrl, saveDir)
 
     latestPatchData = openJsonFile(jsonFilePath) or {}
 
@@ -589,6 +624,9 @@ def checkForNewPatchNotes(jsonFilePath, forceUpdate):
 
     newPatch = patchMatch.group(1)
     fullUrl = urljoin(url, patchLink["href"])
+    if not is_allowed_patch_url(fullUrl):
+        print("Rejected patch article URL outside allowed Riot domains.")
+        return False, None, daysAgo, daysUntilNextPatch, None, None
 
     timeElement = patchLink.find("time") or soup.find("time")
     if timeElement and timeElement.get("datetime"):

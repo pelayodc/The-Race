@@ -6,7 +6,7 @@ from urllib.parse import quote
 import disnake
 import requests
 
-from discord_helpers import get_discord_channel, get_guild_member, send_ephemeral_response
+from discord_helpers import get_discord_channel, get_guild_member, require_allowed_guild, send_ephemeral_response
 from i18n import t
 from linked_accounts import find_summoner_key, normalize_tagline, rebuild_discord_links_from_summoners
 from solo_queue import add_solo_queue_icon, is_secondary_summoner_data, is_subscribed, is_summoner_in_solo_queue, refresh_target_display_names, subscription_targets, toggle_subscription
@@ -202,6 +202,8 @@ class LeaderboardView(disnake.ui.View):
 
     @disnake.ui.button(label="Full leaderboard", style=disnake.ButtonStyle.blurple, custom_id="leaderboard:full")
     async def full_leaderboard(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_allowed_guild(inter):
+            return
         await inter.response.defer(ephemeral=True)
         json_data = ensure_admin_state(load_json_data())
         summoners = cached_leaderboard_summoners(json_data)
@@ -218,6 +220,8 @@ class LeaderboardView(disnake.ui.View):
 
     @disnake.ui.button(label="Subscriptions", style=disnake.ButtonStyle.gray, custom_id="leaderboard:subscriptions")
     async def subscriptions(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        if not await require_allowed_guild(inter):
+            return
         from discord_menus import open_subscription_menu
         await open_subscription_menu(inter)
 
