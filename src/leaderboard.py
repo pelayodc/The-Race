@@ -53,7 +53,7 @@ def recent_results_text(summoner, in_solo_queue=False):
         else:
             results.append("▫️")
     if in_solo_queue:
-        results[0] = "🎮"
+        results = ["🎮"] + results[:4]
     return "".join(results)
 
 
