@@ -8,7 +8,7 @@ from discord_helpers import get_guild_member
 from i18n import t
 from state import ensure_admin_state, load_json_data, utc_now_iso
 from utils.auditUtils import log_event, system_actor
-from utils.commonUtils import riotApKey
+from utils.commonUtils import Rank, riotApKey
 from utils.dataUtils import riot_get_status
 from utils.jsonUtils import writeToJsonFile
 from utils.commonUtils import jsonFile
@@ -257,11 +257,11 @@ async def handle_game_started(json_data, target, active_game):
         json_data,
         "solo_queue.dm_started",
         summoner=summoner.fullName,
-        tier=summoner.tier,
-        rank=summoner.rank,
+        tier=Rank.formatTierRank(summoner.tier, summoner.rank),
+        rank="",
         lp=summoner.leaguePoints,
         url=dpm_url(summoner)
-    )
+    ).replace(" ,", ",")
     status["notifiedStartUserIds"] = await notify_subscribers(json_data, player_id, message)
     json_data["soloQueueStatus"][player_id] = status
     log_event("solo_queue_started", actor=system_actor(), status="success", summary=f"{summoner.fullName} started a SoloQ.", details={"playerId": player_id, "gameId": status.get("gameId")})

@@ -8,6 +8,31 @@ from state import load_json_data
 from state import can_configure_channels
 
 
+def format_patch_notes_message(json_data, updated_patch, days_ago, days_till_next, full_url):
+    if days_ago < -1:
+        when = t(json_data, "commands.patch_in_days", days=abs(days_ago))
+    elif days_ago == -1:
+        when = t(json_data, "commands.patch_tomorrow")
+    elif days_ago == 0:
+        when = t(json_data, "commands.patch_today")
+    elif days_ago == 1:
+        when = t(json_data, "commands.patch_yesterday")
+    else:
+        when = t(json_data, "commands.patch_days_ago", days=days_ago)
+
+    next_line = (
+        ""
+        if days_ago < 1 or days_till_next == 13 or days_till_next == 0
+        else t(json_data, "commands.patch_next_in", days=days_till_next)
+    )
+    return (
+        f'{t(json_data, "commands.patch_title", version=updated_patch)}\n'
+        f'{when}\n'
+        f'{next_line}\n'
+        f'{full_url}'
+    )
+
+
 async def get_discord_channel(channel_id):
     channel = bot.get_channel(channel_id)
     if channel:

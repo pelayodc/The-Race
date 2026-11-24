@@ -160,7 +160,8 @@ class AdminMenu(Menu):
             self.button(view, data, "add", lambda i: self.go(i, "players:add"))
             if self.selected:
                 record = data["summoners"][self.selected]
-                rank = " ".join(str(record.get(key) or "-") for key in ("tier", "rank"))
+                from utils.commonUtils import Rank
+                rank = Rank.formatTierRank(record.get("tier"), record.get("rank"))
                 value = f"{rank} · {record.get('leaguePoints', 0)} LP"
                 if record.get("discordUserId"):
                     value += f"\n<@{record['discordUserId']}> · {text(data, 'primary' if record.get('discordPrimary') else 'secondary')}"

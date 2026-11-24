@@ -98,3 +98,37 @@ async def test_subscription_view_builds_with_existing_subscription(make_summoner
 
     assert len(view.children) == 1
     assert view.children[0].options[0].label.startswith("✓ ")
+
+
+def test_format_tier_rank_omits_division_for_apex_tiers():
+    from personal_report import format_cached_rank
+    from utils.commonUtils import Rank
+
+    assert Rank.formatTierRank("MASTER", "I") == "MASTER"
+    assert Rank.formatTierRank("MASTER", "I", numeric=True) == "MASTER"
+    assert Rank.formatTierRank("MASTER", 42, numeric=True) == "MASTER"
+    assert Rank.formatTierRank("GRANDMASTER", "I") == "GRANDMASTER"
+    assert Rank.formatTierRank("CHALLENGER", "I", numeric=True) == "CHALLENGER"
+    assert Rank.formatTierRank("GOLD", "II") == "GOLD II"
+    assert Rank.formatTierRank("GOLD", "II", numeric=True) == "GOLD 2"
+    assert "MASTER - 150 LP" in format_cached_rank({"tier": "MASTER", "rank": "I", "leaguePoints": 150})
+    assert "MASTER I" not in format_cached_rank({"tier": "MASTER", "rank": "I", "leaguePoints": 150})
+
+
+@pytest.mark.asyncio
+async def test_leaderboard_embed_shows_master_without_division(make_summoner, no_database):
+    master = make_summoner("MasterPlayer#EUW", player_id="1", position=1, tier="MASTER", rank="I", lp=150)
+    gold = make_summoner("GoldPlayer#EUW", player_id="2", position=2, tier="GOLD", rank="II", lp=50)
+    json_data = {
+        "botLanguage": "en",
+        "summoners": {
+            "MasterPlayer#EUW": {"discordUserId": "1", "discordPrimary": True},
+            "GoldPlayer#EUW": {"discordUserId": "2", "discordPrimary": True},
+        },
+    }
+
+    embed = await leaderboard_embed(json_data, [master, gold], include_secondaries=False, use_discord_display_names=False)
+    rank_lines = embed.fields[1].value.splitlines()
+    assert "MASTER - **150 LP**" in rank_lines[0]
+    assert "MASTER I" not in rank_lines[0]
+    assert "GOLD II - **50 LP**" in rank_lines[1]

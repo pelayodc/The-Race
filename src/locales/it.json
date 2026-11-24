@@ -588,7 +588,14 @@
     "admin_setup_done": "Canale amministrazione impostato su {channel}. Messaggio pronto: {message_id}",
     "add_disabled": "/add è disabilitato dalle Impostazioni app. Usa il pannello di amministrazione o abilita lì i comandi chat.",
     "remove_disabled": "/remove è disabilitato dalle Impostazioni app. Usa il pannello di amministrazione o abilita lì i comandi chat.",
-    "patch_failed": "Impossibile recuperare le note dell'ultima patch."
+    "patch_failed": "Impossibile recuperare le note dell'ultima patch.",
+    "patch_title": "Patch {version}",
+    "patch_in_days": "tra {days} giorni",
+    "patch_tomorrow": "domani",
+    "patch_today": "oggi",
+    "patch_yesterday": "ieri",
+    "patch_days_ago": "{days} giorni fa",
+    "patch_next_in": "prossima patch tra: {days} giorni"
   },
   "persistent": {
     "unknown": "sconosciuto",

@@ -463,7 +463,7 @@ def drawSummonerRow(canvas, summoner, index, y, daily, icons, hotStreakIcon, col
     elif recentLosses(summoner) >= 3:
         canvas.paste(coldStreakIcon, (streakX, y + 27), coldStreakIcon)
 
-    rankText = f"{summoner.tier} {Rank.rankToNumber(summoner.rank)}"
+    rankText = Rank.formatTierRank(summoner.tier, summoner.rank, numeric=True)
     draw.text((playerX, y + 58), rankText, fill=(229, 233, 242), font=fonts["tier"])
 
     totalGames = summoner.wins + summoner.losses

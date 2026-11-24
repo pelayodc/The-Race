@@ -588,7 +588,14 @@
     "admin_setup_done": "Salon d'administration défini sur {channel}. Message prêt : {message_id}",
     "add_disabled": "/add est désactivé dans les Paramètres de l'app. Utilise le panneau d'administration ou active les commandes chat là-bas.",
     "remove_disabled": "/remove est désactivé dans les Paramètres de l'app. Utilise le panneau d'administration ou active les commandes chat là-bas.",
-    "patch_failed": "Impossible de récupérer les notes du dernier patch."
+    "patch_failed": "Impossible de récupérer les notes du dernier patch.",
+    "patch_title": "Patch {version}",
+    "patch_in_days": "dans {days} jours",
+    "patch_tomorrow": "demain",
+    "patch_today": "aujourd'hui",
+    "patch_yesterday": "hier",
+    "patch_days_ago": "il y a {days} jours",
+    "patch_next_in": "prochain patch dans : {days} jours"
   },
   "persistent": {
     "unknown": "inconnu",

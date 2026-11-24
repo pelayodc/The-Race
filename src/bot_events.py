@@ -8,7 +8,7 @@ from disnake.ext import tasks
 import bot_runtime
 from admin_panel import AdminView
 from bot_runtime import TASKS
-from discord_helpers import get_discord_channel, send_temporary_public_message
+from discord_helpers import format_patch_notes_message, get_discord_channel, send_temporary_public_message
 from leaderboard import LeaderboardView, estimate_leaderboard_api_calls, send_daily_rank_image, send_or_edit_leaderboard, set_daily_image_status, set_leaderboard_runtime_status
 from matchmaking import MatchmakingView, delete_empty_matchmaking_team_channels, finish_captain_draft_if_complete, is_draft_complete, process_captain_draft_timeout, remove_player_from_matchmaking_draft, user_queue_index
 from persistent_messages import refresh_admin_message, refresh_configured_admin_message, refresh_matchmaking_message, setup_matchmaking_message
@@ -96,11 +96,8 @@ def register_events(bot):
             channel = await get_discord_channel(discordChannel)
             if not channel:
                 return
-            # print("There is a new patch available. Patch version:", updatedPatch, fullUrl, "Image saved at:", imagePath)
-            message = (f'Patch {updatedPatch}\n'
-                       f'{"tomorrow" if daysAgo == -1 else "today" if daysAgo == 0 else "yesterday" if daysAgo == 1 else f"{daysAgo} days ago"}\n'
-                       f'{"" if daysAgo < 1 or daysTillNext == 13 or daysTillNext == 0 else f"next patch in: {daysTillNext} days"}\n'
-                       f'{fullUrl}')
+            json_data = ensure_admin_state(load_json_data())
+            message = format_patch_notes_message(json_data, updatedPatch, daysAgo, daysTillNext, fullUrl)
             if imagePath:
                 with open(imagePath, 'rb') as f:
                     image = disnake.File(f)

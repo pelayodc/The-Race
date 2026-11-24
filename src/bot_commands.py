@@ -2,7 +2,7 @@ import disnake
 from disnake import ApplicationCommandInteraction
 from disnake.ext import commands
 
-from discord_helpers import get_guild_member, require_admin_interaction, send_ephemeral_inter_send
+from discord_helpers import format_patch_notes_message, get_guild_member, require_admin_interaction, send_ephemeral_inter_send
 from i18n import t
 from leaderboard import add_summoner_to_data, remove_summoner_from_data
 from linked_accounts import find_summoner_key, link_summoner_to_discord, normalize_tagline, primary_summoner_for_user, request_discord_link, set_primary_summoner_for_user, unlink_summoner_from_discord
@@ -69,11 +69,8 @@ def register_commands(bot):
         await inter.response.defer()
         update_available, updated_patch, days_ago, days_till_next, full_url, image_path = checkForNewPatchNotes(jsonFile, True)
         if update_available:
-            # print("There is a new patch available. Patch version:", updated_patch, full_url, "Image saved at:", image_path)
-            message = (f'Patch {updated_patch}\n'
-                       f'{"tomorrow" if days_ago == -1 else "today" if days_ago == 0 else "yesterday" if days_ago == 1 else f"{days_ago} days ago"}\n'
-                       f'{"" if days_ago < 1 or days_till_next == 13 or days_till_next == 0 else f"next patch in: {days_till_next} days"}\n'
-                       f'{full_url}')
+            json_data = ensure_admin_state(load_json_data())
+            message = format_patch_notes_message(json_data, updated_patch, days_ago, days_till_next, full_url)
             if image_path:
                 with open(image_path, 'rb') as f:
                     image = disnake.File(f)

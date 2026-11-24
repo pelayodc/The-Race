@@ -12,7 +12,7 @@ from linked_accounts import find_summoner_key, normalize_tagline, rebuild_discor
 from solo_queue import add_solo_queue_icon, is_secondary_summoner_data, is_subscribed, is_summoner_in_solo_queue, refresh_target_display_names, subscription_targets, toggle_subscription
 from state import ensure_admin_state, leaderboard_channel_id, load_json_data, utc_now_iso
 from utils.auditUtils import log_event
-from utils.commonUtils import discordChannel, jsonFile, outputPath, riotApKey
+from utils.commonUtils import Rank, discordChannel, jsonFile, outputPath, riotApKey
 from utils.dataUtils import riotBackoffRemaining, riotBackoffTimestamp, update
 from utils.jsonUtils import openJsonFile, writeToJsonFile
 
@@ -162,7 +162,7 @@ async def leaderboard_embed(json_data, summoners, daily=False, date_str=None, gu
         if score_delta == 0 and games_delta:
             lp_delta = " (-0)"
 
-        tier_rank = f"{summoner.tier} {summoner.rank}"
+        tier_rank = Rank.formatTierRank(summoner.tier, summoner.rank)
         lp = f"{summoner.leaguePoints} LP"
         line_left = f"**{rank}** {name}"
         line_right = f"{rank_icon(summoner.tier)} {tier_rank} - **{lp}** {lp_delta}".rstrip()

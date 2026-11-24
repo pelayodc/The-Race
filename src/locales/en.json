@@ -588,7 +588,14 @@
     "admin_setup_done": "Administration channel set to {channel}. Message ready: {message_id}",
     "add_disabled": "/add is disabled from App settings. Use the administration panel or enable the chat commands there.",
     "remove_disabled": "/remove is disabled from App settings. Use the administration panel or enable the chat commands there.",
-    "patch_failed": "Could not fetch the latest patch notes."
+    "patch_failed": "Could not fetch the latest patch notes.",
+    "patch_title": "Patch {version}",
+    "patch_in_days": "in {days} days",
+    "patch_tomorrow": "tomorrow",
+    "patch_today": "today",
+    "patch_yesterday": "yesterday",
+    "patch_days_ago": "{days} days ago",
+    "patch_next_in": "next patch in: {days} days"
   },
   "persistent": {
     "unknown": "unknown",

@@ -69,6 +69,7 @@ class Rank:
     }
 
     rankOrder = {'IV': 1, 'III': 2, 'II': 3, 'I': 4}
+    apexTiers = {'MASTER', 'GRANDMASTER', 'CHALLENGER'}
 
     iconPath = {
         'IRON': assetPath('Imgs', 'Ranks', 'Iron.png'),
@@ -92,6 +93,16 @@ class Rank:
             return rank_map[rank]
         else:
             return None
+
+    def formatTierRank(tier, rank, numeric=False):
+        if not tier:
+            return "-"
+        if str(tier).upper() in Rank.apexTiers:
+            return str(tier)
+        if rank is None or rank == "":
+            return str(tier)
+        display_rank = Rank.rankToNumber(rank) if numeric else rank
+        return f"{tier} {display_rank}" if display_rank is not None else str(tier)
 
     def calculateScore(tier, rank, leaguepoints):
         tierPoints = (Rank.tierOrder[tier] - 1) * 400

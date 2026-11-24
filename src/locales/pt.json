@@ -588,7 +588,14 @@
     "admin_setup_done": "Canal de administração definido para {channel}. Mensagem pronta: {message_id}",
     "add_disabled": "/add está desativado nas Definições da app. Usa o painel de administração ou ativa os comandos de chat lá.",
     "remove_disabled": "/remove está desativado nas Definições da app. Usa o painel de administração ou ativa os comandos de chat lá.",
-    "patch_failed": "Não foi possível obter as notas do patch mais recente."
+    "patch_failed": "Não foi possível obter as notas do patch mais recente.",
+    "patch_title": "Patch {version}",
+    "patch_in_days": "em {days} dias",
+    "patch_tomorrow": "amanhã",
+    "patch_today": "hoje",
+    "patch_yesterday": "ontem",
+    "patch_days_ago": "há {days} dias",
+    "patch_next_in": "próximo patch em: {days} dias"
   },
   "persistent": {
     "unknown": "desconhecido",

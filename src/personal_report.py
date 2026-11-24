@@ -12,6 +12,7 @@ from linked_accounts import linked_summoners_for_user, primary_summoner_for_user
 from state import ensure_admin_state, load_json_data
 from utils.auditUtils import interaction_actor, log_event
 from utils.commonUtils import jsonFile, riotApKey
+from utils.commonUtils import Rank
 from utils.dataUtils import riot_get
 from utils.drawUtils import generateGoldGraphImage
 from utils.jsonUtils import writeToJsonFile
@@ -23,7 +24,7 @@ def format_cached_rank(summoner_data):
     league_points = summoner_data.get("leaguePoints")
     if not tier or rank is None or league_points is None:
         return t({}, "personal_report.no_rank")
-    return f"{rank_icon(tier)} **{tier} {rank} - {league_points} LP**"
+    return f"{rank_icon(tier)} **{Rank.formatTierRank(tier, rank)} - {league_points} LP**"
 
 def format_signed_delta(value):
     if value is None:
